@@ -12,9 +12,9 @@ use thiserror::Error;
 /// Errors that may be returned by the Claimable-tokens program.
 #[derive(Clone, Debug, Eq, Error, FromPrimitive, PartialEq)]
 pub enum ClaimableProgramError {
-    /// Example error
-    #[error("Example error")]
-    ExampleError,
+    /// Eth address converting error
+    #[error("Eth address converting error")]
+    EthAddressConvertingErr,
 }
 impl From<ClaimableProgramError> for ProgramError {
     fn from(e: ClaimableProgramError) -> Self {
@@ -33,7 +33,7 @@ impl PrintProgramError for ClaimableProgramError {
         E: 'static + std::error::Error + DecodeError<E> + PrintProgramError + FromPrimitive,
     {
         match self {
-            ClaimableProgramError::ExampleError => msg!("Example error message"),
+            ClaimableProgramError::EthAddressConvertingErr => msg!("Eth address converting error"),
         }
     }
 }

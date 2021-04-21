@@ -1,5 +1,6 @@
 //! Instruction types
 
+use crate::state;
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -7,7 +8,6 @@ use solana_program::{
     pubkey::Pubkey,
     system_program, sysvar,
 };
-use crate::state;
 
 /// Instruction definition
 #[derive(BorshSerialize, BorshDeserialize, PartialEq, Debug, Clone)]
@@ -25,12 +25,12 @@ pub enum ClaimableProgramInstruction {
     InitUserBank([u8; state::ETH_ADDRESS_SIZE]),
 
     /// Claim
-    /// 
+    ///
     ///   0. `[r]` UserBank account
     ///   1. `[w]` Token acc from which tokens will be send
     ///   2. `[w]` Receiver token acc
     ///   3. `[r]` SPL token account id
-    Claim([u8; state::SECP_SIGNATURE_SIZE])
+    Claim([u8; state::SECP_SIGNATURE_SIZE]),
 }
 
 /// Create `InitUserBank` instruction
@@ -70,7 +70,7 @@ pub fn claim(
     bank: &Pubkey,
     banks_token_acc: &Pubkey,
     users_token_acc: &Pubkey,
-    signature: [u8; state::SECP_SIGNATURE_SIZE]
+    signature: [u8; state::SECP_SIGNATURE_SIZE],
 ) -> Result<Instruction, ProgramError> {
     let init_data = ClaimableProgramInstruction::Claim(signature);
     let data = init_data
