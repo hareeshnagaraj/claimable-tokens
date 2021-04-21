@@ -2,8 +2,11 @@
 
 use crate::{
     error::ClaimableProgramError,
-    instruction::ClaimableProgramInstruction,
-    state::{UserBank, ETH_ADDRESS_SIZE, SECP_SIGNATURE_SIZE},
+    instruction::{ClaimableProgramInstruction, SignatureData},
+    state::{
+        SecpSignatureOffsets, UserBank, ETH_ADDRESS_SIZE, SECP_SIGNATURE_SIZE,
+        SIGNATURE_OFFSETS_SERIALIZED_SIZE,
+    },
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
@@ -15,7 +18,7 @@ use solana_program::{
     program_error::ProgramError,
     program_pack::Pack,
     pubkey::Pubkey,
-    system_instruction,
+    system_instruction, sysvar,
     sysvar::rent::Rent,
     sysvar::Sysvar,
 };
@@ -81,6 +84,81 @@ impl Processor {
         )
     }
 
+    fn token_transfer<'a>(
+        token_program: AccountInfo<'a>,
+        source: AccountInfo<'a>,
+        destination: AccountInfo<'a>,
+        authority: AccountInfo<'a>,
+        program_id: &Pubkey,
+    ) -> Result<(), ProgramError> {
+        let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
+
+        let (generated_authority_key, bump_seed) = Pubkey::find_program_address(&[&source_data.mint.to_bytes()[..32]], program_id);
+        if generated_authority_key != *authority.key {
+            return Err(ProgramError::InvalidSeeds);
+        }
+        let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
+        let signers = &[&authority_signature_seeds[..]];
+
+        let tx = spl_token::instruction::transfer(
+            token_program.key,
+            source.key,
+            destination.key,
+            authority.key,
+            &[&authority.key],
+            source_data.amount,
+        )?;
+        invoke_signed(
+            &tx,
+            &[source, destination, authority, token_program],
+            signers,
+        )
+    }
+
+    fn validate_eth_signature(
+        signature_data: SignatureData,
+        eth_address: [u8; ETH_ADDRESS_SIZE],
+        secp_instruction_data: Vec<u8>,
+    ) -> Result<(), ProgramError> {
+        let mut instruction_data = vec![];
+        let data_start = 1 + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+        instruction_data.resize(
+            data_start + ETH_ADDRESS_SIZE + SECP_SIGNATURE_SIZE + signature_data.message.len() + 1,
+            0,
+        );
+        let eth_address_offset = data_start;
+        instruction_data[eth_address_offset..eth_address_offset + ETH_ADDRESS_SIZE]
+            .copy_from_slice(&eth_address);
+
+        let signature_offset = data_start + ETH_ADDRESS_SIZE;
+        instruction_data[signature_offset..signature_offset + SECP_SIGNATURE_SIZE]
+            .copy_from_slice(&signature_data.signature);
+
+        instruction_data[signature_offset + SECP_SIGNATURE_SIZE] = signature_data.recovery_id;
+
+        let message_data_offset = signature_offset + SECP_SIGNATURE_SIZE + 1;
+        instruction_data[message_data_offset..].copy_from_slice(&signature_data.message);
+
+        let num_signatures = 1;
+        instruction_data[0] = num_signatures;
+        let offsets = SecpSignatureOffsets {
+            signature_offset: signature_offset as u16,
+            signature_instruction_index: 0,
+            eth_address_offset: eth_address_offset as u16,
+            eth_address_instruction_index: 0,
+            message_data_offset: message_data_offset as u16,
+            message_data_size: signature_data.message.len() as u16,
+            message_instruction_index: 0,
+        };
+        let packed_offsets = offsets.try_to_vec()?;
+        instruction_data[1..data_start].copy_from_slice(packed_offsets.as_slice());
+
+        if instruction_data != secp_instruction_data {
+            return Err(ClaimableProgramError::SignatureVerificationFailed.into());
+        }
+        Ok(())
+    }
+
     /// Initialize user bank
     pub fn process_init_instruction(
         program_id: &Pubkey,
@@ -134,22 +212,51 @@ impl Processor {
         bank.eth_address = eth_address;
         bank.token_account = *acc_to_create_info.key;
 
-        bank
-            .serialize(&mut *bank_account_info.data.borrow_mut())
+        bank.serialize(&mut *bank_account_info.data.borrow_mut())
             .map_err(|e| e.into())
     }
 
     /// Claim user tokens
     pub fn process_claim_instruction(
-        _program_id: &Pubkey,
+        program_id: &Pubkey,
         accounts: &[AccountInfo],
-        _eth_signature: [u8; SECP_SIGNATURE_SIZE],
+        eth_signature: SignatureData,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let bank_account_info = next_account_info(account_info_iter)?;
         let banks_token_account_info = next_account_info(account_info_iter)?;
         let users_token_account_info = next_account_info(account_info_iter)?;
+        let authority_account_info = next_account_info(account_info_iter)?;
         let token_program_id = next_account_info(account_info_iter)?;
+        let instruction_info = next_account_info(account_info_iter)?;
+        let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
+        // check that bank_account_info is initialized
+        let bank = UserBank::try_from_slice(&bank_account_info.data.borrow())?;
+        if !bank.is_initialized() {
+            return Err(ProgramError::UninitializedAccount);
+        }
+
+        // check that in this transaction also contains Secp256 program call
+        if index == 0 {
+            return Err(ClaimableProgramError::Secp256InstructionLosing.into());
+        }
+
+        // Instruction data of Secp256 program call
+        let secp_instruction = sysvar::instructions::load_instruction_at(
+            (index - 1) as usize,
+            &instruction_info.data.borrow(),
+        )
+        .unwrap();
+
+        Self::validate_eth_signature(eth_signature, bank.eth_address, secp_instruction.data)?;
+
+        Self::token_transfer(
+            token_program_id.clone(),
+            banks_token_account_info.clone(),
+            users_token_account_info.clone(),
+            authority_account_info.clone(),
+            program_id,
+        )?;
 
         Ok(())
     }

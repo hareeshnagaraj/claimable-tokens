@@ -15,6 +15,12 @@ pub enum ClaimableProgramError {
     /// Eth address converting error
     #[error("Eth address converting error")]
     EthAddressConvertingErr,
+    /// Signature verification failed
+    #[error("Signature verification failed")]
+    SignatureVerificationFailed,
+    /// Secp256 instruction losing
+    #[error("Secp256 instruction losing")]
+    Secp256InstructionLosing,
 }
 impl From<ClaimableProgramError> for ProgramError {
     fn from(e: ClaimableProgramError) -> Self {
@@ -34,6 +40,10 @@ impl PrintProgramError for ClaimableProgramError {
     {
         match self {
             ClaimableProgramError::EthAddressConvertingErr => msg!("Eth address converting error"),
+            ClaimableProgramError::SignatureVerificationFailed => {
+                msg!("Signature verification failed")
+            }
+            ClaimableProgramError::Secp256InstructionLosing => msg!("Secp256 instruction losing"),
         }
     }
 }

@@ -9,6 +9,17 @@ use solana_program::{
     system_program, sysvar,
 };
 
+/// Signature with message to validate
+#[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
+pub struct SignatureData {
+    /// Secp256k1 signature
+    pub signature: [u8; state::SECP_SIGNATURE_SIZE],
+    /// Ethereum signature recovery ID
+    pub recovery_id: u8,
+    /// Signed message
+    pub message: Vec<u8>,
+}
+
 /// Instruction definition
 #[derive(BorshSerialize, BorshDeserialize, PartialEq, Debug, Clone)]
 pub enum ClaimableProgramInstruction {
@@ -30,7 +41,8 @@ pub enum ClaimableProgramInstruction {
     ///   1. `[w]` Token acc from which tokens will be send
     ///   2. `[w]` Receiver token acc
     ///   3. `[r]` SPL token account id
-    Claim([u8; state::SECP_SIGNATURE_SIZE]),
+    ///   4. `[r]` Sysvar instruction id
+    Claim(SignatureData),
 }
 
 /// Create `InitUserBank` instruction
@@ -70,7 +82,7 @@ pub fn claim(
     bank: &Pubkey,
     banks_token_acc: &Pubkey,
     users_token_acc: &Pubkey,
-    signature: [u8; state::SECP_SIGNATURE_SIZE],
+    signature: SignatureData,
 ) -> Result<Instruction, ProgramError> {
     let init_data = ClaimableProgramInstruction::Claim(signature);
     let data = init_data
@@ -81,6 +93,7 @@ pub fn claim(
         AccountMeta::new(*banks_token_acc, false),
         AccountMeta::new(*users_token_acc, false),
         AccountMeta::new_readonly(spl_token::id(), false),
+        AccountMeta::new_readonly(sysvar::instructions::id(), false),
     ];
     Ok(Instruction {
         program_id: *program_id,
