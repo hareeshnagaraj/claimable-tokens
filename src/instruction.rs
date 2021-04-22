@@ -40,8 +40,9 @@ pub enum ClaimableProgramInstruction {
     ///   0. `[r]` UserBank account
     ///   1. `[w]` Token acc from which tokens will be send
     ///   2. `[w]` Receiver token acc
-    ///   3. `[r]` SPL token account id
-    ///   4. `[r]` Sysvar instruction id
+    ///   3. `[r]` Banks token account authority
+    ///   4. `[r]` SPL token account id
+    ///   5. `[r]` Sysvar instruction id
     Claim(SignatureData),
 }
 
@@ -82,6 +83,7 @@ pub fn claim(
     bank: &Pubkey,
     banks_token_acc: &Pubkey,
     users_token_acc: &Pubkey,
+    authority: &Pubkey,
     signature: SignatureData,
 ) -> Result<Instruction, ProgramError> {
     let init_data = ClaimableProgramInstruction::Claim(signature);
@@ -92,6 +94,7 @@ pub fn claim(
         AccountMeta::new_readonly(*bank, false),
         AccountMeta::new(*banks_token_acc, false),
         AccountMeta::new(*users_token_acc, false),
+        AccountMeta::new_readonly(*authority, false),
         AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(sysvar::instructions::id(), false),
     ];

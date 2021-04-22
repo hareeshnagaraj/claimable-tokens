@@ -93,14 +93,22 @@ impl Processor {
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
         program_id: &Pubkey,
+        eth_address: [u8; ETH_ADDRESS_SIZE],
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let (generated_authority_key, bump_seed) = Pubkey::find_program_address(&[&source_data.mint.to_bytes()[..32]], program_id);
+        let (generated_authority_key, bump_seed) = Pubkey::find_program_address(
+            &[&source_data.mint.to_bytes()[..32], &eth_address],
+            program_id,
+        );
         if generated_authority_key != *authority.key {
             return Err(ProgramError::InvalidSeeds);
         }
-        let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
+        let authority_signature_seeds = [
+            &source_data.mint.to_bytes()[..32],
+            &eth_address,
+            &[bump_seed],
+        ];
         let signers = &[&authority_signature_seeds[..]];
 
         let tx = spl_token::instruction::transfer(
@@ -257,6 +265,7 @@ impl Processor {
             users_token_account_info.clone(),
             authority_account_info.clone(),
             program_id,
+            bank.eth_address,
         )?;
 
         Ok(())
