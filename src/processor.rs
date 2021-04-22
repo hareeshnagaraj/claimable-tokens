@@ -26,6 +26,9 @@ use solana_program::{
 /// Program state handler.
 pub struct Processor {}
 impl Processor {
+    /// Token acc seed
+    pub const TOKEN_ACC_SEED: &'static str = "eth_user_acc";
+
     #[allow(clippy::too_many_arguments)]
     fn create_account<'a>(
         program_id: &Pubkey,
@@ -33,30 +36,30 @@ impl Processor {
         account_to_create: AccountInfo<'a>,
         mint_key: &Pubkey,
         base: AccountInfo<'a>,
-        seed: &str,
+        eth_address: [u8; ETH_ADDRESS_SIZE],
         required_lamports: u64,
         space: u64,
         owner: &Pubkey,
     ) -> ProgramResult {
         let (program_base_address, bump_seed) =
-            Pubkey::find_program_address(&[&mint_key.to_bytes()[..32]], program_id);
+            Pubkey::find_program_address(&[&mint_key.to_bytes()[..32], &eth_address], program_id);
         if program_base_address != *base.key {
             return Err(ProgramError::InvalidSeeds);
         }
 
         let generated_address_to_create =
-            Pubkey::create_with_seed(&program_base_address, seed, program_id)?;
+            Pubkey::create_with_seed(&program_base_address, Self::TOKEN_ACC_SEED, owner)?;
         if generated_address_to_create != *account_to_create.key {
             return Err(ProgramError::InvalidSeeds);
         }
-        let signature = &[&mint_key.to_bytes()[..32], &[bump_seed]];
+        let signature = &[&mint_key.to_bytes()[..32], &eth_address, &[bump_seed]];
 
         invoke_signed(
             &system_instruction::create_account_with_seed(
                 &funder.key,
                 &account_to_create.key,
                 &base.key,
-                seed,
+                Self::TOKEN_ACC_SEED,
                 required_lamports,
                 space,
                 owner,
@@ -187,17 +190,15 @@ impl Processor {
         // check that mint is initialized
         let _mint = spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
 
-        let eth_address_str: Result<&str, ProgramError> = std::str::from_utf8(&eth_address)
-            .map_err(|_e| ClaimableProgramError::EthAddressConvertingErr.into());
         Self::create_account(
             program_id,
             funder_account_info.clone(),
             acc_to_create_info.clone(),
             mint_account_info.key,
             base_account_info.clone(),
-            eth_address_str?,
-            rent.minimum_balance(UserBank::LEN),
-            UserBank::LEN as u64,
+            eth_address,
+            rent.minimum_balance(spl_token::state::Account::LEN),
+            spl_token::state::Account::LEN as u64,
             token_program_id.key,
         )?;
 
