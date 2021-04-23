@@ -11,15 +11,6 @@ pub const ETH_ADDRESS_SIZE: usize = 20;
 /// SIGNATURE_OFFSETS_SERIALIZED_SIZE
 pub const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 11;
 
-/// UserBank struct
-#[derive(BorshSerialize, BorshDeserialize, PartialEq, Debug, Clone, Default)]
-pub struct UserBank {
-    /// Users ETH address
-    pub eth_address: [u8; ETH_ADDRESS_SIZE],
-    /// Token account derived from user's ETH address
-    pub token_account: Pubkey,
-}
-
 /// Secp256k1 signature offsets data
 #[derive(Clone, Copy, Debug, Default, PartialEq, BorshDeserialize, BorshSerialize)]
 pub struct SecpSignatureOffsets {
@@ -37,14 +28,4 @@ pub struct SecpSignatureOffsets {
     pub message_data_size: u16,
     /// Index on message instruction in buffer
     pub message_instruction_index: u8,
-}
-
-impl UserBank {
-    /// LEN
-    pub const LEN: usize = 52;
-
-    /// Check if UserBank is initialized
-    pub fn is_initialized(&self) -> bool {
-        *self != UserBank::default()
-    }
 }

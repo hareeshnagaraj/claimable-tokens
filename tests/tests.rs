@@ -175,7 +175,6 @@ pub async fn mint_tokens_to(
 
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
-    bank: &Keypair,
     mint: &Pubkey,
     base_acc: &Pubkey,
     acc_to_create: &Pubkey,
@@ -184,7 +183,6 @@ async fn init_user_bank(
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
             &id(),
-            &bank.pubkey(),
             &program_context.payer.pubkey(),
             mint,
             base_acc,
@@ -196,7 +194,7 @@ async fn init_user_bank(
     );
 
     transaction.sign(
-        &[&program_context.payer, bank],
+        &[&program_context.payer],
         program_context.last_blockhash,
     );
     program_context
@@ -216,17 +214,6 @@ async fn test_init_instruction() {
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
     let eth_address = construct_eth_address(&secp_pubkey);
 
-    let bank_account = Keypair::new();
-    create_account(
-        &mut program_context,
-        &bank_account,
-        rent.minimum_balance(state::UserBank::LEN),
-        state::UserBank::LEN as u64,
-        &id(),
-    )
-    .await
-    .unwrap();
-
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
     create_mint(
@@ -239,19 +226,18 @@ async fn test_init_instruction() {
     .unwrap();
 
     let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32], &eth_address],
+        &[&mint_account.pubkey().to_bytes()[..32]],
         &id(),
     );
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
-        processor::Processor::TOKEN_ACC_SEED,
+        &bs58::encode(eth_address).into_string(),
         &spl_token::id(),
     )
     .unwrap();
 
     init_user_bank(
         &mut program_context,
-        &bank_account,
         &mint_account.pubkey(),
         &base_acc,
         &address_to_create,
@@ -259,13 +245,6 @@ async fn test_init_instruction() {
     )
     .await
     .unwrap();
-
-    let bank_account_data = get_account(&mut program_context, &bank_account.pubkey()).await;
-    let bank_account = state::UserBank::try_from_slice(&bank_account_data.data.as_slice()).unwrap();
-
-    assert!(bank_account.is_initialized());
-    assert_eq!(bank_account.eth_address, eth_address);
-    assert_eq!(bank_account.token_account, address_to_create);
 
     let token_account_data = get_account(&mut program_context, &address_to_create).await;
     // check that token account is initialized
@@ -310,18 +289,8 @@ async fn test_claim_instruction() {
         signature,
         recovery_id,
         message: message.to_vec(),
+        eth_address,
     };
-
-    let bank_account = Keypair::new();
-    create_account(
-        &mut program_context,
-        &bank_account,
-        rent.minimum_balance(state::UserBank::LEN),
-        state::UserBank::LEN as u64,
-        &id(),
-    )
-    .await
-    .unwrap();
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -335,19 +304,18 @@ async fn test_claim_instruction() {
     .unwrap();
 
     let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32], &eth_address],
+        &[&mint_account.pubkey().to_bytes()[..32]],
         &id(),
     );
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
-        processor::Processor::TOKEN_ACC_SEED,
+        &bs58::encode(eth_address).into_string(),
         &spl_token::id(),
     )
     .unwrap();
 
     init_user_bank(
         &mut program_context,
-        &bank_account,
         &mint_account.pubkey(),
         &base_acc,
         &address_to_create,
@@ -384,7 +352,6 @@ async fn test_claim_instruction() {
             secp256_program_instruction,
             instruction::claim(
                 &id(),
-                &bank_account.pubkey(),
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
@@ -451,18 +418,8 @@ async fn test_claim_with_wrong_signature_instruction() {
         signature,
         recovery_id,
         message: message.to_vec(),
+        eth_address,
     };
-
-    let bank_account = Keypair::new();
-    create_account(
-        &mut program_context,
-        &bank_account,
-        rent.minimum_balance(state::UserBank::LEN),
-        state::UserBank::LEN as u64,
-        &id(),
-    )
-    .await
-    .unwrap();
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -476,19 +433,18 @@ async fn test_claim_with_wrong_signature_instruction() {
     .unwrap();
 
     let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32], &eth_address],
+        &[&mint_account.pubkey().to_bytes()[..32]],
         &id(),
     );
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
-        processor::Processor::TOKEN_ACC_SEED,
+        &bs58::encode(eth_address).into_string(),
         &spl_token::id(),
     )
     .unwrap();
 
     init_user_bank(
         &mut program_context,
-        &bank_account,
         &mint_account.pubkey(),
         &base_acc,
         &address_to_create,
@@ -525,7 +481,6 @@ async fn test_claim_with_wrong_signature_instruction() {
             secp256_program_instruction,
             instruction::claim(
                 &id(),
-                &bank_account.pubkey(),
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,

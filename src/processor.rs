@@ -4,7 +4,7 @@ use crate::{
     error::ClaimableProgramError,
     instruction::{ClaimableProgramInstruction, SignatureData},
     state::{
-        SecpSignatureOffsets, UserBank, ETH_ADDRESS_SIZE, SECP_SIGNATURE_SIZE,
+        SecpSignatureOffsets, ETH_ADDRESS_SIZE, SECP_SIGNATURE_SIZE,
         SIGNATURE_OFFSETS_SERIALIZED_SIZE,
     },
 };
@@ -26,9 +26,6 @@ use solana_program::{
 /// Program state handler.
 pub struct Processor {}
 impl Processor {
-    /// Token acc seed
-    pub const TOKEN_ACC_SEED: &'static str = "eth_user_acc";
-
     #[allow(clippy::too_many_arguments)]
     fn create_account<'a>(
         program_id: &Pubkey,
@@ -42,24 +39,25 @@ impl Processor {
         owner: &Pubkey,
     ) -> ProgramResult {
         let (program_base_address, bump_seed) =
-            Pubkey::find_program_address(&[&mint_key.to_bytes()[..32], &eth_address], program_id);
+            Pubkey::find_program_address(&[&mint_key.to_bytes()[..32]], program_id);
         if program_base_address != *base.key {
             return Err(ProgramError::InvalidSeeds);
         }
 
+        let seed = bs58::encode(eth_address).into_string();
         let generated_address_to_create =
-            Pubkey::create_with_seed(&program_base_address, Self::TOKEN_ACC_SEED, owner)?;
+            Pubkey::create_with_seed(&program_base_address, &seed, owner)?;
         if generated_address_to_create != *account_to_create.key {
             return Err(ProgramError::InvalidSeeds);
         }
-        let signature = &[&mint_key.to_bytes()[..32], &eth_address, &[bump_seed]];
+        let signature = &[&mint_key.to_bytes()[..32], &[bump_seed]];
 
         invoke_signed(
             &system_instruction::create_account_with_seed(
                 &funder.key,
                 &account_to_create.key,
                 &base.key,
-                Self::TOKEN_ACC_SEED,
+                &seed,
                 required_lamports,
                 space,
                 owner,
@@ -97,16 +95,21 @@ impl Processor {
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let (generated_authority_key, bump_seed) = Pubkey::find_program_address(
-            &[&source_data.mint.to_bytes()[..32], &eth_address],
-            program_id,
-        );
-        if generated_authority_key != *authority.key {
+        let (program_base_address, bump_seed) =
+            Pubkey::find_program_address(&[&source_data.mint.to_bytes()[..32]], program_id);
+
+        let seed = bs58::encode(eth_address).into_string();
+        let generated_source_address =
+            Pubkey::create_with_seed(&program_base_address, &seed, &spl_token::id())?;
+        if generated_source_address != *source.key {
+            return Err(ProgramError::InvalidSeeds);
+        }
+
+        if program_base_address != *authority.key {
             return Err(ProgramError::InvalidSeeds);
         }
         let authority_signature_seeds = [
             &source_data.mint.to_bytes()[..32],
-            &eth_address,
             &[bump_seed],
         ];
         let signers = &[&authority_signature_seeds[..]];
@@ -128,7 +131,6 @@ impl Processor {
 
     fn validate_eth_signature(
         signature_data: SignatureData,
-        eth_address: [u8; ETH_ADDRESS_SIZE],
         secp_instruction_data: Vec<u8>,
     ) -> Result<(), ProgramError> {
         let mut instruction_data = vec![];
@@ -139,7 +141,7 @@ impl Processor {
         );
         let eth_address_offset = data_start;
         instruction_data[eth_address_offset..eth_address_offset + ETH_ADDRESS_SIZE]
-            .copy_from_slice(&eth_address);
+            .copy_from_slice(&signature_data.eth_address);
 
         let signature_offset = data_start + ETH_ADDRESS_SIZE;
         instruction_data[signature_offset..signature_offset + SECP_SIGNATURE_SIZE]
@@ -177,7 +179,6 @@ impl Processor {
         eth_address: [u8; ETH_ADDRESS_SIZE],
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
-        let bank_account_info = next_account_info(account_info_iter)?;
         let funder_account_info = next_account_info(account_info_iter)?;
         let mint_account_info = next_account_info(account_info_iter)?;
         let base_account_info = next_account_info(account_info_iter)?;
@@ -187,14 +188,6 @@ impl Processor {
         let rent = &Rent::from_account_info(rent_account_info)?;
         let _system_program = next_account_info(account_info_iter)?;
 
-        let mut bank = UserBank::try_from_slice(&bank_account_info.data.borrow())?;
-        if bank.is_initialized() {
-            return Err(ProgramError::AccountAlreadyInitialized);
-        }
-
-        if !rent.is_exempt(bank_account_info.lamports(), bank_account_info.data_len()) {
-            return Err(ProgramError::AccountNotRentExempt);
-        }
         // check that mint is initialized
         let _mint = spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
 
@@ -216,13 +209,7 @@ impl Processor {
             mint_account_info.clone(),
             base_account_info.clone(),
             rent_account_info.clone(),
-        )?;
-
-        bank.eth_address = eth_address;
-        bank.token_account = *acc_to_create_info.key;
-
-        bank.serialize(&mut *bank_account_info.data.borrow_mut())
-            .map_err(|e| e.into())
+        )
     }
 
     /// Claim user tokens
@@ -232,18 +219,12 @@ impl Processor {
         eth_signature: SignatureData,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
-        let bank_account_info = next_account_info(account_info_iter)?;
         let banks_token_account_info = next_account_info(account_info_iter)?;
         let users_token_account_info = next_account_info(account_info_iter)?;
         let authority_account_info = next_account_info(account_info_iter)?;
         let token_program_id = next_account_info(account_info_iter)?;
         let instruction_info = next_account_info(account_info_iter)?;
         let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
-        // check that bank_account_info is initialized
-        let bank = UserBank::try_from_slice(&bank_account_info.data.borrow())?;
-        if !bank.is_initialized() {
-            return Err(ProgramError::UninitializedAccount);
-        }
 
         // check that in this transaction also contains Secp256 program call
         if index == 0 {
@@ -257,7 +238,7 @@ impl Processor {
         )
         .unwrap();
 
-        Self::validate_eth_signature(eth_signature, bank.eth_address, secp_instruction.data)?;
+        Self::validate_eth_signature(eth_signature.clone(), secp_instruction.data)?;
 
         Self::token_transfer(
             token_program_id.clone(),
@@ -265,10 +246,8 @@ impl Processor {
             users_token_account_info.clone(),
             authority_account_info.clone(),
             program_id,
-            bank.eth_address,
-        )?;
-
-        Ok(())
+            eth_signature.eth_address,
+        )
     }
 
     /// Processes an instruction
@@ -279,8 +258,8 @@ impl Processor {
     ) -> ProgramResult {
         let instruction = ClaimableProgramInstruction::try_from_slice(input)?;
         match instruction {
-            ClaimableProgramInstruction::InitUserBank(eth_address) => {
-                msg!("Instruction: InitUserBank");
+            ClaimableProgramInstruction::CreateTokenAccount(eth_address) => {
+                msg!("Instruction: CreateTokenAccount");
                 Self::process_init_instruction(program_id, accounts, eth_address)
             }
             ClaimableProgramInstruction::Claim(signature) => {
