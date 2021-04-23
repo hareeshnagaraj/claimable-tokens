@@ -17,7 +17,7 @@ use solana_program::{
     program::{invoke, invoke_signed},
     program_error::ProgramError,
     program_pack::Pack,
-    pubkey::Pubkey,
+    pubkey::{Pubkey, PUBKEY_BYTES},
     system_instruction, sysvar,
     sysvar::rent::Rent,
     sysvar::Sysvar,
@@ -131,12 +131,13 @@ impl Processor {
 
     fn validate_eth_signature(
         signature_data: SignatureData,
+        message: [u8; PUBKEY_BYTES],
         secp_instruction_data: Vec<u8>,
     ) -> Result<(), ProgramError> {
         let mut instruction_data = vec![];
         let data_start = 1 + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
         instruction_data.resize(
-            data_start + ETH_ADDRESS_SIZE + SECP_SIGNATURE_SIZE + signature_data.message.len() + 1,
+            data_start + ETH_ADDRESS_SIZE + SECP_SIGNATURE_SIZE + PUBKEY_BYTES + 1,
             0,
         );
         let eth_address_offset = data_start;
@@ -150,7 +151,7 @@ impl Processor {
         instruction_data[signature_offset + SECP_SIGNATURE_SIZE] = signature_data.recovery_id;
 
         let message_data_offset = signature_offset + SECP_SIGNATURE_SIZE + 1;
-        instruction_data[message_data_offset..].copy_from_slice(&signature_data.message);
+        instruction_data[message_data_offset..].copy_from_slice(&message);
 
         let num_signatures = 1;
         instruction_data[0] = num_signatures;
@@ -160,7 +161,7 @@ impl Processor {
             eth_address_offset: eth_address_offset as u16,
             eth_address_instruction_index: 0,
             message_data_offset: message_data_offset as u16,
-            message_data_size: signature_data.message.len() as u16,
+            message_data_size: PUBKEY_BYTES as u16,
             message_instruction_index: 0,
         };
         let packed_offsets = offsets.try_to_vec()?;
@@ -238,7 +239,7 @@ impl Processor {
         )
         .unwrap();
 
-        Self::validate_eth_signature(eth_signature.clone(), secp_instruction.data)?;
+        Self::validate_eth_signature(eth_signature.clone(), users_token_account_info.key.to_bytes(), secp_instruction.data)?;
 
         Self::token_transfer(
             token_program_id.clone(),

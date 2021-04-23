@@ -18,8 +18,6 @@ pub struct SignatureData {
     pub eth_address: [u8; state::ETH_ADDRESS_SIZE],
     /// Ethereum signature recovery ID
     pub recovery_id: u8,
-    /// Signed message
-    pub message: Vec<u8>,
 }
 
 /// Instruction definition

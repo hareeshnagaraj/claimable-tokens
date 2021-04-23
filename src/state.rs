@@ -1,6 +1,5 @@
 //! State transition types
 use borsh::{BorshDeserialize, BorshSerialize};
-use solana_program::pubkey::Pubkey;
 
 /// Size of Secp256k1 signature
 pub const SECP_SIGNATURE_SIZE: usize = 64;

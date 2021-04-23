@@ -265,7 +265,8 @@ async fn test_claim_instruction() {
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
     let eth_address = construct_eth_address(&secp_pubkey);
 
-    let message = [8u8; 30];
+    let user_token_account = Keypair::new();
+    let message = user_token_account.pubkey().to_bytes();
 
     let secp256_program_instruction =
         secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
@@ -288,7 +289,6 @@ async fn test_claim_instruction() {
     let signature_data = instruction::SignatureData {
         signature,
         recovery_id,
-        message: message.to_vec(),
         eth_address,
     };
 
@@ -335,7 +335,6 @@ async fn test_claim_instruction() {
     .await
     .unwrap();
 
-    let user_token_account = Keypair::new();
     let user_token_account_authority = Keypair::new();
     create_token_account(
         &mut program_context,
@@ -417,7 +416,6 @@ async fn test_claim_with_wrong_signature_instruction() {
     let signature_data = instruction::SignatureData {
         signature,
         recovery_id,
-        message: message.to_vec(),
         eth_address,
     };
 
