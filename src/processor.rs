@@ -36,7 +36,6 @@ impl Processor {
         eth_address: [u8; ETH_ADDRESS_SIZE],
         required_lamports: u64,
         space: u64,
-        owner: &Pubkey,
     ) -> ProgramResult {
         let (program_base_address, bump_seed) =
             Pubkey::find_program_address(&[&mint_key.to_bytes()[..32]], program_id);
@@ -46,7 +45,7 @@ impl Processor {
 
         let seed = bs58::encode(eth_address).into_string();
         let generated_address_to_create =
-            Pubkey::create_with_seed(&program_base_address, &seed, owner)?;
+            Pubkey::create_with_seed(&program_base_address, &seed, &spl_token::id())?;
         if generated_address_to_create != *account_to_create.key {
             return Err(ProgramError::InvalidSeeds);
         }
@@ -60,7 +59,7 @@ impl Processor {
                 &seed,
                 required_lamports,
                 space,
-                owner,
+                &spl_token::id(),
             ),
             &[funder.clone(), account_to_create.clone(), base.clone()],
             &[signature],
@@ -68,7 +67,6 @@ impl Processor {
     }
 
     fn initialize_token_account<'a>(
-        token_program_id: &Pubkey,
         account_to_initialize: AccountInfo<'a>,
         mint: AccountInfo<'a>,
         owner: AccountInfo<'a>,
@@ -76,7 +74,7 @@ impl Processor {
     ) -> ProgramResult {
         invoke(
             &spl_token::instruction::initialize_account(
-                token_program_id,
+                &spl_token::id(),
                 &account_to_initialize.key,
                 mint.key,
                 owner.key,
@@ -86,7 +84,6 @@ impl Processor {
     }
 
     fn token_transfer<'a>(
-        token_program: AccountInfo<'a>,
         source: AccountInfo<'a>,
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
@@ -115,7 +112,7 @@ impl Processor {
         let signers = &[&authority_signature_seeds[..]];
 
         let tx = spl_token::instruction::transfer(
-            token_program.key,
+            &spl_token::id(),
             source.key,
             destination.key,
             authority.key,
@@ -124,7 +121,7 @@ impl Processor {
         )?;
         invoke_signed(
             &tx,
-            &[source, destination, authority, token_program],
+            &[source, destination, authority],
             signers,
         )
     }
@@ -184,7 +181,8 @@ impl Processor {
         let mint_account_info = next_account_info(account_info_iter)?;
         let base_account_info = next_account_info(account_info_iter)?;
         let acc_to_create_info = next_account_info(account_info_iter)?;
-        let token_program_id = next_account_info(account_info_iter)?;
+        // need such as we call spl_token program to initialize account
+        let _token_program_id = next_account_info(account_info_iter)?;
         let rent_account_info = next_account_info(account_info_iter)?;
         let rent = &Rent::from_account_info(rent_account_info)?;
         let _system_program = next_account_info(account_info_iter)?;
@@ -201,11 +199,9 @@ impl Processor {
             eth_address,
             rent.minimum_balance(spl_token::state::Account::LEN),
             spl_token::state::Account::LEN as u64,
-            token_program_id.key,
         )?;
 
         Self::initialize_token_account(
-            token_program_id.key,
             acc_to_create_info.clone(),
             mint_account_info.clone(),
             base_account_info.clone(),
@@ -223,7 +219,8 @@ impl Processor {
         let banks_token_account_info = next_account_info(account_info_iter)?;
         let users_token_account_info = next_account_info(account_info_iter)?;
         let authority_account_info = next_account_info(account_info_iter)?;
-        let token_program_id = next_account_info(account_info_iter)?;
+        // need such as call spl_token program to transfer tokens
+        let _token_program_id = next_account_info(account_info_iter)?;
         let instruction_info = next_account_info(account_info_iter)?;
         let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
 
@@ -242,7 +239,6 @@ impl Processor {
         Self::validate_eth_signature(eth_signature.clone(), users_token_account_info.key.to_bytes(), secp_instruction.data)?;
 
         Self::token_transfer(
-            token_program_id.clone(),
             banks_token_account_info.clone(),
             users_token_account_info.clone(),
             authority_account_info.clone(),
