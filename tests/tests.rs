@@ -1,6 +1,5 @@
 #![cfg(feature = "test-bpf")]
 
-use borsh::de::BorshDeserialize;
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
@@ -32,39 +31,11 @@ pub async fn get_account(program_context: &mut ProgramTestContext, pubkey: &Pubk
         .expect("account empty")
 }
 
-fn construct_eth_address(pubkey: &PublicKey) -> [u8; state::ETH_ADDRESS_SIZE] {
-    let mut addr = [0u8; state::ETH_ADDRESS_SIZE];
+fn construct_eth_address(pubkey: &PublicKey) -> [u8; processor::Processor::ETH_ADDRESS_SIZE] {
+    let mut addr = [0u8; processor::Processor::ETH_ADDRESS_SIZE];
     addr.copy_from_slice(&Keccak256::digest(&pubkey.serialize()[1..])[12..]);
-    assert_eq!(addr.len(), state::ETH_ADDRESS_SIZE);
+    assert_eq!(addr.len(), processor::Processor::ETH_ADDRESS_SIZE);
     addr
-}
-
-async fn create_account(
-    program_context: &mut ProgramTestContext,
-    account_to_create: &Keypair,
-    lamports: u64,
-    space: u64,
-    owner: &Pubkey,
-) -> Result<(), TransportError> {
-    let mut transaction = Transaction::new_with_payer(
-        &[system_instruction::create_account(
-            &program_context.payer.pubkey(),
-            &account_to_create.pubkey(),
-            lamports,
-            space,
-            owner,
-        )],
-        Some(&program_context.payer.pubkey()),
-    );
-    transaction.sign(
-        &[&program_context.payer, account_to_create],
-        program_context.last_blockhash,
-    );
-    program_context
-        .banks_client
-        .process_transaction(transaction)
-        .await?;
-    Ok(())
 }
 
 async fn create_token_account(
@@ -178,7 +149,7 @@ async fn init_user_bank(
     mint: &Pubkey,
     base_acc: &Pubkey,
     acc_to_create: &Pubkey,
-    eth_address: [u8; state::ETH_ADDRESS_SIZE],
+    eth_address: [u8; processor::Processor::ETH_ADDRESS_SIZE],
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
@@ -187,16 +158,13 @@ async fn init_user_bank(
             mint,
             base_acc,
             acc_to_create,
-            eth_address,
+            instruction::CreateTokenAccount { eth_address },
         )
         .unwrap()],
         Some(&program_context.payer.pubkey()),
     );
 
-    transaction.sign(
-        &[&program_context.payer],
-        program_context.last_blockhash,
-    );
+    transaction.sign(&[&program_context.payer], program_context.last_blockhash);
     program_context
         .banks_client
         .process_transaction(transaction)
@@ -225,10 +193,8 @@ async fn test_init_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32]],
-        &id(),
-    );
+    let (base_acc, _) =
+        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
         &bs58::encode(eth_address).into_string(),
@@ -271,27 +237,6 @@ async fn test_claim_instruction() {
     let secp256_program_instruction =
         secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
 
-    let start = 1;
-    let end = start + state::SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-
-    let offsets =
-        state::SecpSignatureOffsets::try_from_slice(&secp256_program_instruction.data[start..end])
-            .unwrap();
-
-    let sig_start = offsets.signature_offset as usize;
-    let sig_end = sig_start + state::SECP_SIGNATURE_SIZE;
-
-    let mut signature: [u8; state::SECP_SIGNATURE_SIZE] = [0u8; state::SECP_SIGNATURE_SIZE];
-    signature.copy_from_slice(&secp256_program_instruction.data[sig_start..sig_end]);
-
-    let recovery_id = secp256_program_instruction.data[sig_end];
-
-    let signature_data = instruction::SignatureData {
-        signature,
-        recovery_id,
-        eth_address,
-    };
-
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
     create_mint(
@@ -303,10 +248,8 @@ async fn test_claim_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32]],
-        &id(),
-    );
+    let (base_acc, _) =
+        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
         &bs58::encode(eth_address).into_string(),
@@ -354,7 +297,7 @@ async fn test_claim_instruction() {
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
-                signature_data,
+                instruction::Claim { eth_address },
             )
             .unwrap(),
         ],
@@ -398,27 +341,6 @@ async fn test_claim_with_wrong_signature_instruction() {
     let secp256_program_instruction =
         secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
 
-    let start = 1;
-    let end = start + state::SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-
-    let offsets =
-        state::SecpSignatureOffsets::try_from_slice(&secp256_program_instruction.data[start..end])
-            .unwrap();
-
-    let sig_start = offsets.signature_offset as usize;
-    let sig_end = sig_start + state::SECP_SIGNATURE_SIZE;
-
-    let signature: [u8; state::SECP_SIGNATURE_SIZE] = [0u8; state::SECP_SIGNATURE_SIZE];
-    // signature.copy_from_slice(&secp256_program_instruction.data[sig_start..sig_end]);
-
-    let recovery_id = secp256_program_instruction.data[sig_end];
-
-    let signature_data = instruction::SignatureData {
-        signature,
-        recovery_id,
-        eth_address,
-    };
-
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
     create_mint(
@@ -430,10 +352,8 @@ async fn test_claim_with_wrong_signature_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) = Pubkey::find_program_address(
-        &[&mint_account.pubkey().to_bytes()[..32]],
-        &id(),
-    );
+    let (base_acc, _) =
+        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
     let address_to_create = Pubkey::create_with_seed(
         &base_acc,
         &bs58::encode(eth_address).into_string(),
@@ -482,7 +402,7 @@ async fn test_claim_with_wrong_signature_instruction() {
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
-                signature_data,
+                instruction::Claim { eth_address },
             )
             .unwrap(),
         ],

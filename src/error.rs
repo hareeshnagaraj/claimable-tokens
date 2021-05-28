@@ -38,12 +38,6 @@ impl PrintProgramError for ClaimableProgramError {
     where
         E: 'static + std::error::Error + DecodeError<E> + PrintProgramError + FromPrimitive,
     {
-        match self {
-            ClaimableProgramError::EthAddressConvertingErr => msg!("Eth address converting error"),
-            ClaimableProgramError::SignatureVerificationFailed => {
-                msg!("Signature verification failed")
-            }
-            ClaimableProgramError::Secp256InstructionLosing => msg!("Secp256 instruction losing"),
-        }
+        msg!(&self.to_string())
     }
 }

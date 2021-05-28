@@ -1,14 +1,7 @@
 //! Program state processor
 
-use crate::{
-    error::ClaimableProgramError,
-    instruction::{ClaimableProgramInstruction, SignatureData},
-    state::{
-        SecpSignatureOffsets, ETH_ADDRESS_SIZE, SECP_SIGNATURE_SIZE,
-        SIGNATURE_OFFSETS_SERIALIZED_SIZE,
-    },
-};
-use borsh::{BorshDeserialize, BorshSerialize};
+use crate::{error::ClaimableProgramError, instruction::ClaimableProgramInstruction};
+use borsh::BorshDeserialize;
 use solana_program::{
     account_info::next_account_info,
     account_info::AccountInfo,
@@ -17,16 +10,18 @@ use solana_program::{
     program::{invoke, invoke_signed},
     program_error::ProgramError,
     program_pack::Pack,
-    pubkey::{Pubkey, PUBKEY_BYTES},
-    system_instruction, sysvar,
+    pubkey::Pubkey,
+    secp256k1_program, system_instruction, sysvar,
     sysvar::rent::Rent,
     sysvar::Sysvar,
-    secp256k1_program,
 };
 
 /// Program state handler.
 pub struct Processor {}
 impl Processor {
+    /// Ethereum public key size
+    pub const ETH_ADDRESS_SIZE: usize = 20;
+
     #[allow(clippy::too_many_arguments)]
     fn create_account<'a>(
         program_id: &Pubkey,
@@ -34,7 +29,7 @@ impl Processor {
         account_to_create: AccountInfo<'a>,
         mint_key: &Pubkey,
         base: AccountInfo<'a>,
-        eth_address: [u8; ETH_ADDRESS_SIZE],
+        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
@@ -89,7 +84,7 @@ impl Processor {
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
         program_id: &Pubkey,
-        eth_address: [u8; ETH_ADDRESS_SIZE],
+        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
@@ -106,10 +101,7 @@ impl Processor {
         if program_base_address != *authority.key {
             return Err(ProgramError::InvalidSeeds);
         }
-        let authority_signature_seeds = [
-            &source_data.mint.to_bytes()[..32],
-            &[bump_seed],
-        ];
+        let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
         let signers = &[&authority_signature_seeds[..]];
 
         let tx = spl_token::instruction::transfer(
@@ -120,54 +112,28 @@ impl Processor {
             &[&authority.key],
             source_data.amount,
         )?;
-        invoke_signed(
-            &tx,
-            &[source, destination, authority],
-            signers,
-        )
+        invoke_signed(&tx, &[source, destination, authority], signers)
     }
 
     fn validate_eth_signature(
-        signature_data: SignatureData,
-        message: [u8; PUBKEY_BYTES],
+        expected_signer: [u8; Self::ETH_ADDRESS_SIZE],
+        message: &[u8],
         secp_instruction_data: Vec<u8>,
     ) -> Result<(), ProgramError> {
-        let mut instruction_data = vec![];
-        let data_start = 1 + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
-        instruction_data.resize(
-            data_start + ETH_ADDRESS_SIZE + SECP_SIGNATURE_SIZE + PUBKEY_BYTES + 1,
-            0,
-        );
-        let eth_address_offset = data_start;
-        instruction_data[eth_address_offset..eth_address_offset + ETH_ADDRESS_SIZE]
-            .copy_from_slice(&signature_data.eth_address);
-
-        let signature_offset = data_start + ETH_ADDRESS_SIZE;
-        instruction_data[signature_offset..signature_offset + SECP_SIGNATURE_SIZE]
-            .copy_from_slice(&signature_data.signature);
-
-        instruction_data[signature_offset + SECP_SIGNATURE_SIZE] = signature_data.recovery_id;
-
-        let message_data_offset = signature_offset + SECP_SIGNATURE_SIZE + 1;
-        instruction_data[message_data_offset..].copy_from_slice(&message);
-
-        let num_signatures = 1;
-        instruction_data[0] = num_signatures;
-        let offsets = SecpSignatureOffsets {
-            signature_offset: signature_offset as u16,
-            signature_instruction_index: 0,
-            eth_address_offset: eth_address_offset as u16,
-            eth_address_instruction_index: 0,
-            message_data_offset: message_data_offset as u16,
-            message_data_size: PUBKEY_BYTES as u16,
-            message_instruction_index: 0,
-        };
-        let packed_offsets = offsets.try_to_vec()?;
-        instruction_data[1..data_start].copy_from_slice(packed_offsets.as_slice());
-
-        if instruction_data != secp_instruction_data {
+        let eth_address_offset = 12;
+        let instruction_signer = secp_instruction_data
+            [eth_address_offset..eth_address_offset + Self::ETH_ADDRESS_SIZE]
+            .to_vec();
+        if instruction_signer != expected_signer {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
         }
+
+        let message_data_offset = 97; // meta (12) + address (20) + signature (65) = 97
+        let instruction_message = secp_instruction_data[message_data_offset..].to_vec();
+        if instruction_message != *message {
+            return Err(ClaimableProgramError::SignatureVerificationFailed.into());
+        }
+
         Ok(())
     }
 
@@ -175,18 +141,15 @@ impl Processor {
     pub fn process_init_instruction(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-        eth_address: [u8; ETH_ADDRESS_SIZE],
+        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let funder_account_info = next_account_info(account_info_iter)?;
         let mint_account_info = next_account_info(account_info_iter)?;
         let base_account_info = next_account_info(account_info_iter)?;
         let acc_to_create_info = next_account_info(account_info_iter)?;
-        // need such as we call spl_token program to initialize account
-        let _token_program_id = next_account_info(account_info_iter)?;
         let rent_account_info = next_account_info(account_info_iter)?;
         let rent = &Rent::from_account_info(rent_account_info)?;
-        let _system_program = next_account_info(account_info_iter)?;
 
         // check that mint is initialized
         let _mint = spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
@@ -214,14 +177,12 @@ impl Processor {
     pub fn process_claim_instruction(
         program_id: &Pubkey,
         accounts: &[AccountInfo],
-        eth_signature: SignatureData,
+        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let banks_token_account_info = next_account_info(account_info_iter)?;
         let users_token_account_info = next_account_info(account_info_iter)?;
         let authority_account_info = next_account_info(account_info_iter)?;
-        // need such as call spl_token program to transfer tokens
-        let _token_program_id = next_account_info(account_info_iter)?;
         let instruction_info = next_account_info(account_info_iter)?;
         let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
 
@@ -241,14 +202,18 @@ impl Processor {
             return Err(ClaimableProgramError::Secp256InstructionLosing.into());
         }
 
-        Self::validate_eth_signature(eth_signature.clone(), users_token_account_info.key.to_bytes(), secp_instruction.data)?;
+        Self::validate_eth_signature(
+            eth_address,
+            &users_token_account_info.key.to_bytes(),
+            secp_instruction.data,
+        )?;
 
         Self::token_transfer(
             banks_token_account_info.clone(),
             users_token_account_info.clone(),
             authority_account_info.clone(),
             program_id,
-            eth_signature.eth_address,
+            eth_address,
         )
     }
 
@@ -262,11 +227,11 @@ impl Processor {
         match instruction {
             ClaimableProgramInstruction::CreateTokenAccount(eth_address) => {
                 msg!("Instruction: CreateTokenAccount");
-                Self::process_init_instruction(program_id, accounts, eth_address)
+                Self::process_init_instruction(program_id, accounts, eth_address.eth_address)
             }
-            ClaimableProgramInstruction::Claim(signature) => {
+            ClaimableProgramInstruction::Claim(eth_address) => {
                 msg!("Instruction: Claim");
-                Self::process_claim_instruction(program_id, accounts, signature)
+                Self::process_claim_instruction(program_id, accounts, eth_address.eth_address)
             }
         }
     }

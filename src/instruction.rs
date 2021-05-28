@@ -1,6 +1,6 @@
 //! Instruction types
 
-use crate::state;
+use crate::processor::Processor;
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -9,15 +9,18 @@ use solana_program::{
     system_program, sysvar,
 };
 
-/// Signature with message to validate
+/// Eth address
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
-pub struct SignatureData {
-    /// Secp256k1 signature
-    pub signature: [u8; state::SECP_SIGNATURE_SIZE],
+pub struct CreateTokenAccount {
     /// Ethereum address
-    pub eth_address: [u8; state::ETH_ADDRESS_SIZE],
-    /// Ethereum signature recovery ID
-    pub recovery_id: u8,
+    pub eth_address: [u8; Processor::ETH_ADDRESS_SIZE],
+}
+
+/// Eth address
+#[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
+pub struct Claim {
+    /// Ethereum address
+    pub eth_address: [u8; Processor::ETH_ADDRESS_SIZE],
 }
 
 /// Instruction definition
@@ -29,19 +32,19 @@ pub enum ClaimableProgramInstruction {
     ///   1. `[r]` Mint account
     ///   2. `[r]` Base acc used in PDA token acc (need because of create_with_seed instruction)
     ///   3. `[w]` PDA token account to create
-    ///   4. `[r]` SPL token account id
-    ///   5. `[r]` Rent id
+    ///   4. `[r]` Rent id
+    ///   5. `[r]` SPL token account id
     ///   6. `[r]` System program id
-    CreateTokenAccount([u8; state::ETH_ADDRESS_SIZE]),
+    CreateTokenAccount(CreateTokenAccount),
 
     /// Claim
     ///
     ///   0. `[w]` Token acc from which tokens will be send (bank account)
     ///   1. `[w]` Receiver token acc
     ///   2. `[r]` Banks token account authority
-    ///   3. `[r]` SPL token account id
-    ///   4. `[r]` Sysvar instruction id
-    Claim(SignatureData),
+    ///   3. `[r]` Sysvar instruction id
+    ///   4. `[r]` SPL token account id
+    Claim(Claim),
 }
 
 /// Create `CreateTokenAccount` instruction
@@ -51,7 +54,7 @@ pub fn init(
     mint: &Pubkey,
     base_acc: &Pubkey,
     acc_to_create: &Pubkey,
-    eth_address: [u8; state::ETH_ADDRESS_SIZE],
+    eth_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
     let init_data = ClaimableProgramInstruction::CreateTokenAccount(eth_address);
     let data = init_data
@@ -62,8 +65,8 @@ pub fn init(
         AccountMeta::new_readonly(*mint, false),
         AccountMeta::new_readonly(*base_acc, false),
         AccountMeta::new(*acc_to_create, false),
-        AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
+        AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(system_program::id(), false),
     ];
     Ok(Instruction {
@@ -79,9 +82,9 @@ pub fn claim(
     banks_token_acc: &Pubkey,
     users_token_acc: &Pubkey,
     authority: &Pubkey,
-    signature: SignatureData,
+    eth_address: Claim,
 ) -> Result<Instruction, ProgramError> {
-    let init_data = ClaimableProgramInstruction::Claim(signature);
+    let init_data = ClaimableProgramInstruction::Claim(eth_address);
     let data = init_data
         .try_to_vec()
         .or(Err(ProgramError::InvalidArgument))?;
@@ -89,8 +92,8 @@ pub fn claim(
         AccountMeta::new(*banks_token_acc, false),
         AccountMeta::new(*users_token_acc, false),
         AccountMeta::new_readonly(*authority, false),
-        AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(sysvar::instructions::id(), false),
+        AccountMeta::new_readonly(spl_token::id(), false),
     ];
     Ok(Instruction {
         program_id: *program_id,
