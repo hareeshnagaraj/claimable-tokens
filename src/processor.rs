@@ -21,6 +21,7 @@ use solana_program::{
     system_instruction, sysvar,
     sysvar::rent::Rent,
     sysvar::Sysvar,
+    secp256k1_program,
 };
 
 /// Program state handler.
@@ -235,6 +236,10 @@ impl Processor {
             &instruction_info.data.borrow(),
         )
         .unwrap();
+
+        if secp_instruction.program_id != secp256k1_program::id() {
+            return Err(ClaimableProgramError::Secp256InstructionLosing.into());
+        }
 
         Self::validate_eth_signature(eth_signature.clone(), users_token_account_info.key.to_bytes(), secp_instruction.data)?;
 
