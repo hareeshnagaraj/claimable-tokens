@@ -1,5 +1,6 @@
 #![cfg(feature = "test-bpf")]
 
+use claimable_tokens::utils::program::PubkeyPatterns;
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
@@ -147,8 +148,6 @@ pub async fn mint_tokens_to(
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
     mint: &Pubkey,
-    base_acc: &Pubkey,
-    acc_to_create: &Pubkey,
     eth_address: [u8; processor::Processor::ETH_ADDRESS_SIZE],
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
@@ -156,8 +155,6 @@ async fn init_user_bank(
             &id(),
             &program_context.payer.pubkey(),
             mint,
-            base_acc,
-            acc_to_create,
             instruction::CreateTokenAccount { eth_address },
         )
         .unwrap()],
@@ -193,24 +190,18 @@ async fn test_init_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) =
-        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
-    let address_to_create = Pubkey::create_with_seed(
-        &base_acc,
-        &bs58::encode(eth_address).into_string(),
-        &spl_token::id(),
-    )
-    .unwrap();
+    let (_, _, address_to_create) = mint_account
+        .pubkey()
+        .get_pda(
+            &bs58::encode(eth_address).into_string(),
+            &id(),
+            &spl_token::id(),
+        )
+        .unwrap();
 
-    init_user_bank(
-        &mut program_context,
-        &mint_account.pubkey(),
-        &base_acc,
-        &address_to_create,
-        eth_address,
-    )
-    .await
-    .unwrap();
+    init_user_bank(&mut program_context, &mint_account.pubkey(), eth_address)
+        .await
+        .unwrap();
 
     let token_account_data = get_account(&mut program_context, &address_to_create).await;
     // check that token account is initialized
@@ -248,24 +239,18 @@ async fn test_claim_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) =
-        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
-    let address_to_create = Pubkey::create_with_seed(
-        &base_acc,
-        &bs58::encode(eth_address).into_string(),
-        &spl_token::id(),
-    )
-    .unwrap();
+    let (base_acc, _, address_to_create) = mint_account
+        .pubkey()
+        .get_pda(
+            &bs58::encode(eth_address).into_string(),
+            &id(),
+            &spl_token::id(),
+        )
+        .unwrap();
 
-    init_user_bank(
-        &mut program_context,
-        &mint_account.pubkey(),
-        &base_acc,
-        &address_to_create,
-        eth_address,
-    )
-    .await
-    .unwrap();
+    init_user_bank(&mut program_context, &mint_account.pubkey(), eth_address)
+        .await
+        .unwrap();
 
     let tokens_amount = 10_000;
     mint_tokens_to(
@@ -352,24 +337,18 @@ async fn test_claim_with_wrong_signature_instruction() {
     .await
     .unwrap();
 
-    let (base_acc, _) =
-        Pubkey::find_program_address(&[&mint_account.pubkey().to_bytes()[..32]], &id());
-    let address_to_create = Pubkey::create_with_seed(
-        &base_acc,
-        &bs58::encode(eth_address).into_string(),
-        &spl_token::id(),
-    )
-    .unwrap();
+    let (base_acc, _, address_to_create) = mint_account
+        .pubkey()
+        .get_pda(
+            &bs58::encode(eth_address).into_string(),
+            &id(),
+            &spl_token::id(),
+        )
+        .unwrap();
 
-    init_user_bank(
-        &mut program_context,
-        &mint_account.pubkey(),
-        &base_acc,
-        &address_to_create,
-        eth_address,
-    )
-    .await
-    .unwrap();
+    init_user_bank(&mut program_context, &mint_account.pubkey(), eth_address)
+        .await
+        .unwrap();
 
     let tokens_amount = 10_000;
     mint_tokens_to(

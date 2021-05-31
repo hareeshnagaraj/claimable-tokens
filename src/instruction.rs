@@ -1,6 +1,6 @@
 //! Instruction types
 
-use crate::processor::Processor;
+use crate::{processor::Processor, utils::program::PubkeyPatterns};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -52,19 +52,19 @@ pub fn init(
     program_id: &Pubkey,
     funder: &Pubkey,
     mint: &Pubkey,
-    base_acc: &Pubkey,
-    acc_to_create: &Pubkey,
     eth_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
-    let init_data = ClaimableProgramInstruction::CreateTokenAccount(eth_address);
-    let data = init_data
-        .try_to_vec()
-        .or(Err(ProgramError::InvalidArgument))?;
+    let (base_acc, _, acc_to_create) = mint.get_pda(
+        &bs58::encode(eth_address.eth_address).into_string(),
+        program_id,
+        &spl_token::id(),
+    )?;
+    let data = ClaimableProgramInstruction::CreateTokenAccount(eth_address).try_to_vec()?;
     let accounts = vec![
         AccountMeta::new(*funder, true),
         AccountMeta::new_readonly(*mint, false),
-        AccountMeta::new_readonly(*base_acc, false),
-        AccountMeta::new(*acc_to_create, false),
+        AccountMeta::new_readonly(base_acc, false),
+        AccountMeta::new(acc_to_create, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(system_program::id(), false),
@@ -84,10 +84,7 @@ pub fn claim(
     authority: &Pubkey,
     eth_address: Claim,
 ) -> Result<Instruction, ProgramError> {
-    let init_data = ClaimableProgramInstruction::Claim(eth_address);
-    let data = init_data
-        .try_to_vec()
-        .or(Err(ProgramError::InvalidArgument))?;
+    let data = ClaimableProgramInstruction::Claim(eth_address).try_to_vec()?;
     let accounts = vec![
         AccountMeta::new(*banks_token_acc, false),
         AccountMeta::new(*users_token_acc, false),

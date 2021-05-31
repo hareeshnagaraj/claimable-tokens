@@ -6,6 +6,7 @@ use solana_program::{
     decode_error::DecodeError,
     msg,
     program_error::{PrintProgramError, ProgramError},
+    sanitize::SanitizeError,
 };
 use thiserror::Error;
 
@@ -21,6 +22,9 @@ pub enum ClaimableProgramError {
     /// Secp256 instruction losing
     #[error("Secp256 instruction losing")]
     Secp256InstructionLosing,
+    /// Instruction load error
+    #[error("Instruction load error")]
+    InstructionLoadError,
 }
 impl From<ClaimableProgramError> for ProgramError {
     fn from(e: ClaimableProgramError) -> Self {
@@ -40,4 +44,9 @@ impl PrintProgramError for ClaimableProgramError {
     {
         msg!(&self.to_string())
     }
+}
+
+/// Convert SanitizeError to ClaimableProgramError
+pub fn to_claimable_tokens_error(_e: SanitizeError) -> ClaimableProgramError {
+    ClaimableProgramError::InstructionLoadError
 }

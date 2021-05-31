@@ -1,6 +1,10 @@
 //! Program state processor
 
-use crate::{error::ClaimableProgramError, instruction::ClaimableProgramInstruction};
+use crate::{
+    error::{to_claimable_tokens_error, ClaimableProgramError},
+    instruction::ClaimableProgramInstruction,
+    utils::program::PubkeyPatterns,
+};
 use borsh::BorshDeserialize;
 use solana_program::{
     account_info::next_account_info,
@@ -33,18 +37,16 @@ impl Processor {
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
-        let (program_base_address, bump_seed) =
-            Pubkey::find_program_address(&[&mint_key.to_bytes()[..32]], program_id);
-        if program_base_address != *base.key {
-            return Err(ProgramError::InvalidSeeds);
-        }
+        base.key
+            .program_address_generated_correct(mint_key, program_id)?;
 
         let seed = bs58::encode(eth_address).into_string();
-        let generated_address_to_create =
-            Pubkey::create_with_seed(&program_base_address, &seed, &spl_token::id())?;
-        if generated_address_to_create != *account_to_create.key {
-            return Err(ProgramError::InvalidSeeds);
-        }
+
+        let (_, bump_seed) =
+            account_to_create
+                .key
+                .derived_right(mint_key, &seed, program_id, &spl_token::id())?;
+
         let signature = &[&mint_key.to_bytes()[..32], &[bump_seed]];
 
         invoke_signed(
@@ -88,19 +90,12 @@ impl Processor {
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let (program_base_address, bump_seed) =
-            Pubkey::find_program_address(&[&source_data.mint.to_bytes()[..32]], program_id);
-
         let seed = bs58::encode(eth_address).into_string();
-        let generated_source_address =
-            Pubkey::create_with_seed(&program_base_address, &seed, &spl_token::id())?;
-        if generated_source_address != *source.key {
-            return Err(ProgramError::InvalidSeeds);
-        }
 
-        if program_base_address != *authority.key {
-            return Err(ProgramError::InvalidSeeds);
-        }
+        let (_, bump_seed) =
+            source
+                .key
+                .derived_right(&source_data.mint, &seed, program_id, &spl_token::id())?;
         let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
         let signers = &[&authority_signature_seeds[..]];
 
@@ -196,7 +191,7 @@ impl Processor {
             (index - 1) as usize,
             &instruction_info.data.borrow(),
         )
-        .unwrap();
+        .map_err(to_claimable_tokens_error)?;
 
         if secp_instruction.program_id != secp256k1_program::id() {
             return Err(ClaimableProgramError::Secp256InstructionLosing.into());
