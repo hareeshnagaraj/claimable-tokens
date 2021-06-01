@@ -21,6 +21,9 @@ pub struct CreateTokenAccount {
 pub struct Claim {
     /// Ethereum address
     pub eth_address: [u8; Processor::ETH_ADDRESS_SIZE],
+    /// The amount of claiming tokens. If set 0 claim all tokens
+    /// otherwise claim specified value 
+    pub amount: u64,
 }
 
 /// Instruction definition

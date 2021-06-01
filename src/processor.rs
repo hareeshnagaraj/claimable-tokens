@@ -87,6 +87,7 @@ impl Processor {
         authority: AccountInfo<'a>,
         program_id: &Pubkey,
         eth_address: [u8; Self::ETH_ADDRESS_SIZE],
+        amount: u64,
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
@@ -99,13 +100,19 @@ impl Processor {
         let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
         let signers = &[&authority_signature_seeds[..]];
 
+        let debit_amount = if amount != 0 {
+            amount
+        } else {
+            source_data.amount
+        };
+
         let tx = spl_token::instruction::transfer(
             &spl_token::id(),
             source.key,
             destination.key,
             authority.key,
             &[&authority.key],
-            source_data.amount,
+            debit_amount,
         )?;
         invoke_signed(&tx, &[source, destination, authority], signers)
     }
@@ -173,6 +180,7 @@ impl Processor {
         program_id: &Pubkey,
         accounts: &[AccountInfo],
         eth_address: [u8; Self::ETH_ADDRESS_SIZE],
+        amount: u64,
     ) -> ProgramResult {
         let account_info_iter = &mut accounts.iter();
         let banks_token_account_info = next_account_info(account_info_iter)?;
@@ -209,6 +217,7 @@ impl Processor {
             authority_account_info.clone(),
             program_id,
             eth_address,
+            amount,
         )
     }
 
@@ -224,9 +233,9 @@ impl Processor {
                 msg!("Instruction: CreateTokenAccount");
                 Self::process_init_instruction(program_id, accounts, eth_address.eth_address)
             }
-            ClaimableProgramInstruction::Claim(eth_address) => {
+            ClaimableProgramInstruction::Claim(instruction) => {
                 msg!("Instruction: Claim");
-                Self::process_claim_instruction(program_id, accounts, eth_address.eth_address)
+                Self::process_claim_instruction(program_id, accounts, instruction.eth_address, instruction.amount)
             }
         }
     }
