@@ -130,7 +130,8 @@ impl Processor {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
         }
 
-        let message_data_offset = 97; // meta (12) + address (20) + signature (65) = 97
+        //NOTE: meta (12) + address (20) + signature (65) = 97
+        let message_data_offset = 97; 
         let instruction_message = secp_instruction_data[message_data_offset..].to_vec();
         if instruction_message != *message {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
