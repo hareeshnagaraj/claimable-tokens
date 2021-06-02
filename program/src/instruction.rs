@@ -77,6 +77,10 @@ pub fn init(
 }
 
 /// Create `Claim` instruction
+/// 
+/// NOTE: Instruction must followed after `new_secp256k1_instruction`
+/// with ethereum private key and user token account public key 
+/// or error message `Secp256 instruction losing` will be issued 
 pub fn claim(
     program_id: &Pubkey,
     banks_token_acc: &Pubkey,

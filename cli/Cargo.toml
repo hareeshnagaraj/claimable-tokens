@@ -1,9 +1,19 @@
 [package]
-name = "cli"
+name = "claimable-tokens-cli"
 version = "0.1.0"
-authors = ["Dmitry <mamhigtt@gmail.com>"]
+authors = ["Atticlab team"]
+description = "CLI tools for "
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+clap = "2.33.3"
+solana-cli-config = "1.5.0"
+solana-clap-utils = "1.5.0"
+solana-logger = "1.5.0"
+solana-client = "1.5.0"
+solana-sdk = "1.6.6"
+borsh = "0.8.2"
+anyhow = "1.0.36"
+claimable-tokens = { path="../program", features = [ "no-entrypoint" ] }
+spl-token = { git="https://github.com/solana-labs/solana-program-library", features = [ "no-entrypoint" ] }
+libsecp256k1 = "0.3.5"
