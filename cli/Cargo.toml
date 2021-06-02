@@ -2,7 +2,7 @@
 name = "claimable-tokens-cli"
 version = "0.1.0"
 authors = ["Atticlab team"]
-description = "CLI tools for "
+description = "CLI tools for transfer fund from associated ethereum account to another one"
 edition = "2018"
 
 [dependencies]

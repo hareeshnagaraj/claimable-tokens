@@ -1,66 +1,60 @@
 use std::convert::TryInto;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+use claimable_tokens::{
+    instruction::{claim, Claim},
+    processor::Processor,
+};
+use clap::{
+    crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, SubCommand,
+};
+use secp256k1::curve::Scalar;
 use solana_clap_utils::{
     fee_payer::fee_payer_arg,
     input_parsers::pubkey_of,
-    input_validators::{
-        is_pubkey, 
-        is_url_or_moniker, 
-        is_valid_signer
-    },
+    input_validators::{is_pubkey, is_url_or_moniker},
     keypair::signer_from_path,
-};
-use clap::{
-    App,
-    Arg,
-    crate_name,
-    crate_description,
-    crate_version,
-    AppSettings,
-    SubCommand,
-    value_t,
 };
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
-    commitment_config::CommitmentConfig, 
-    pubkey::Pubkey, signature::Signer, 
-    transaction::Transaction,
-    secp256k1_instruction::new_secp256k1_instruction,
+    bs58, commitment_config::CommitmentConfig, pubkey::Pubkey,
+    secp256k1_instruction::new_secp256k1_instruction, signature::Signer, transaction::Transaction,
 };
-use claimable_tokens::{instruction::{Claim, claim}, processor::Processor};
 
 struct Config {
-    owner: Box<dyn Signer>,
     fee_payer: Box<dyn Signer>,
     rpc_client: RpcClient,
 }
 
 fn transfer(
-    config: Config, 
-    priv_key: secp256k1::SecretKey, 
-    mint: Pubkey, 
-    ethereum_address: [u8; Processor::ETH_ADDRESS_SIZE], 
+    config: Config,
+    ethereum_address: [u8; Processor::ETH_ADDRESS_SIZE],
+    priv_key: secp256k1::SecretKey,
+    mint: Pubkey,
+    destination: Pubkey,
     amount: u64,
 ) -> Result<()> {
-    let users_token_acc: Pubkey;
-    let (generated, bump_seed) = Pubkey::find_program_address(&[&mint.to_bytes()[..32]], &claimable_tokens::id());
+    // Get base (PDA unique for different token mint) account address
+    let (base, bump) = Pubkey::find_program_address(&[&mint.to_bytes()[..32]], &spl_token::id());
+    let seed = bs58::encode(ethereum_address).into_string();
+    // Get derived token account (associated with base and ethereum user) address
+    let derived = Pubkey::create_with_seed(&base, seed.as_str(), &spl_token::id())?;
 
     let instructions = &[
-        new_secp256k1_instruction(&priv_key, &users_token_acc.to_bytes()),
+        new_secp256k1_instruction(&priv_key, &derived.to_bytes()),
         claim(
-            &claimable_tokens::id(), 
-            banks_token_acc, 
-            users_token_acc, 
-            authority, 
-            Claim{ eth_address: ethereum_address },
+            &claimable_tokens::id(),
+            &derived,
+            &destination,
+            &base,
+            Claim {
+                eth_address: ethereum_address,
+            },
         )?,
     ];
     let mut tx = Transaction::new_with_payer(instructions, Some(&config.fee_payer.pubkey()));
     let (recent_blockhash, fee_calculator) = config.rpc_client.get_recent_blockhash()?;
-    let signers = vec![
-    ];
-    tx.sign(&signers, recent_blockhash);
+    tx.sign(&[config.fee_payer.as_ref()], recent_blockhash);
     config
         .rpc_client
         .send_and_confirm_transaction_with_spinner(&tx)?;
@@ -101,19 +95,6 @@ fn main() -> Result<()> {
                 Default from the configuration file.",
                 ),
         )
-        .arg(
-            Arg::with_name("owner")
-                .long("owner")
-                .value_name("KEYPAIR")
-                .validator(is_valid_signer)
-                .takes_value(true)
-                .global(true)
-                .help(
-                    "Specify the token owner account. \
-             This may be a keypair file, the ASK keyword. \
-             Defaults to the client keypair.",
-                ),
-        )
         .arg(fee_payer_arg().global(true))
         .subcommand(
             SubCommand::with_name("transfer").args(&[
@@ -129,6 +110,18 @@ fn main() -> Result<()> {
                     .takes_value(true)
                     .required(true)
                     .help("Ethereum address associated with the token account"),
+                Arg::with_name("private_key")
+                    .validator(is_pubkey)
+                    .value_name("ETHEREUM_PRIVATE_KEY")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Ethereum private key for sign transaction"),
+                Arg::with_name("destination")
+                    .validator(is_pubkey)
+                    .value_name("SOLANA_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Solana transfer destination account"),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
                     .takes_value(true)
@@ -148,15 +141,6 @@ fn main() -> Result<()> {
     };
     let json_rpc_url = value_t!(matches, "json_rpc_url", String)
         .unwrap_or_else(|_| cli_config.json_rpc_url.clone());
-    let owner = signer_from_path(
-        &matches,
-        matches
-            .value_of("owner")
-            .unwrap_or(&cli_config.keypair_path),
-        "owner",
-        &mut wallet_manager,
-    )
-    .unwrap(); //TODO
     let fee_payer = signer_from_path(
         &matches,
         matches
@@ -165,10 +149,9 @@ fn main() -> Result<()> {
         "fee_payer",
         &mut wallet_manager,
     )
-    .unwrap(); //TODO
+    .expect("Keypair for set fee pair cannot be found in path");
 
     let config = Config {
-        owner: owner,
         fee_payer: fee_payer,
         rpc_client: RpcClient::new_with_commitment(json_rpc_url, CommitmentConfig::confirmed()),
     };
@@ -177,16 +160,35 @@ fn main() -> Result<()> {
 
     match matches.subcommand() {
         ("transfer", Some(args)) => {
-            let mint = pubkey_of(args, "mint").unwrap();
             let ethereum_address = value_t!(args.value_of("address"), String)?;
-            let conv_eth_add: [u8; Processor::ETH_ADDRESS_SIZE] = ethereum_address.as_bytes()
-                .try_into()
-                .expect(format!("Incorrect ethereum address {}. Because len {}, but must be {}.", ethereum_address, ethereum_address.len(), Processor::ETH_ADDRESS_SIZE).as_str());
-            
+            let conv_eth_add: [u8; Processor::ETH_ADDRESS_SIZE] =
+                ethereum_address.as_bytes().try_into().expect(
+                    format!(
+                        "Incorrect ethereum address {}. Because len {}, but must be {}.",
+                        ethereum_address,
+                        ethereum_address.len(),
+                        Processor::ETH_ADDRESS_SIZE
+                    )
+                    .as_str(),
+                );
+
+            let private_key = value_t!(args.value_of("private_key"), String)?;
+            let pk_slice: [u8; 32] = private_key.as_bytes().try_into().expect(
+                format!(
+                    "Incorrect private key. Because len {}, but must be {}.",
+                    private_key.len(),
+                    8,
+                )
+                .as_str(),
+            );
+            let conv_eth_pk = secp256k1::SecretKey::parse(&pk_slice)?;
+
+            let mint = pubkey_of(args, "mint").unwrap();
+            let destination = pubkey_of(args, "destination").unwrap();
             let amount = value_t!(args.value_of("amount"), u64)
                 .expect("Can't parse amount, it is must present like integer");
-                
-            transfer(config, mint, conv_eth_add, amount)?
+
+            transfer(config, conv_eth_add, conv_eth_pk, mint, destination, amount)?
         }
         _ => unreachable!(),
     }
