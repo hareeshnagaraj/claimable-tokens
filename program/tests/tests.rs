@@ -1,6 +1,6 @@
 #![cfg(feature = "test-bpf")]
 
-use claimable_tokens::utils::program::PubkeyPatterns;
+use claimable_tokens::utils::program::EthereumPubkey;
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
@@ -32,10 +32,10 @@ pub async fn get_account(program_context: &mut ProgramTestContext, pubkey: &Pubk
         .expect("account empty")
 }
 
-fn construct_eth_address(pubkey: &PublicKey) -> [u8; processor::Processor::ETH_ADDRESS_SIZE] {
-    let mut addr = [0u8; processor::Processor::ETH_ADDRESS_SIZE];
+fn construct_eth_address(pubkey: &PublicKey) -> EthereumPubkey {
+    let mut addr = [0u8; std::mem::size_of::<EthereumPubkey>()];
     addr.copy_from_slice(&Keccak256::digest(&pubkey.serialize()[1..])[12..]);
-    assert_eq!(addr.len(), processor::Processor::ETH_ADDRESS_SIZE);
+    assert_eq!(addr.len(), std::mem::size_of::<EthereumPubkey>());
     addr
 }
 
@@ -148,7 +148,7 @@ pub async fn mint_tokens_to(
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
     mint: &Pubkey,
-    eth_address: [u8; processor::Processor::ETH_ADDRESS_SIZE],
+    eth_address: EthereumPubkey,
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
@@ -212,11 +212,11 @@ async fn test_init_instruction() {
 }
 
 async fn prepare_claim(
-    program_context: &mut ProgramTestContext, 
-    mint_account: Keypair, 
-    rent: solana_program::rent::Rent, 
-    mint_authority: Keypair, 
-    eth_address: [u8; processor::Processor::ETH_ADDRESS_SIZE], 
+    program_context: &mut ProgramTestContext,
+    mint_account: Keypair,
+    rent: solana_program::rent::Rent,
+    mint_authority: Keypair,
+    eth_address: EthereumPubkey,
     user_token_account: &Keypair,
 ) -> (Pubkey, Pubkey, u64) {
     create_mint(
@@ -281,12 +281,14 @@ async fn test_claim_all_instruction() {
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
     let (base_acc, address_to_create, tokens_amount) = prepare_claim(
-        &mut program_context, 
-        mint_account, rent, 
-        mint_authority, 
-        eth_address, 
+        &mut program_context,
+        mint_account,
+        rent,
+        mint_authority,
+        eth_address,
         &user_token_account,
-    ).await;
+    )
+    .await;
 
     let mut transaction = Transaction::new_with_payer(
         &[
@@ -296,7 +298,10 @@ async fn test_claim_all_instruction() {
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
-                instruction::Claim { eth_address, amount: 0},
+                instruction::Claim {
+                    eth_address,
+                    amount: 0,
+                },
             )
             .unwrap(),
         ],
@@ -324,8 +329,6 @@ async fn test_claim_all_instruction() {
     assert_eq!(user_token_account.amount, tokens_amount);
 }
 
-
-
 #[tokio::test]
 async fn test_claim_with_amount_instruction() {
     let mut program_context = program_test().start_with_context().await;
@@ -345,7 +348,15 @@ async fn test_claim_with_amount_instruction() {
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
-    let (base_acc, address_to_create, tokens_amount) = prepare_claim(&mut program_context, mint_account, rent, mint_authority, eth_address, &user_token_account).await;
+    let (base_acc, address_to_create, tokens_amount) = prepare_claim(
+        &mut program_context,
+        mint_account,
+        rent,
+        mint_authority,
+        eth_address,
+        &user_token_account,
+    )
+    .await;
     let transfer_amount = rand::thread_rng().gen_range(1..tokens_amount);
 
     let mut transaction = Transaction::new_with_payer(
@@ -356,7 +367,10 @@ async fn test_claim_with_amount_instruction() {
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
-                instruction::Claim { eth_address, amount: transfer_amount},
+                instruction::Claim {
+                    eth_address,
+                    amount: transfer_amount,
+                },
             )
             .unwrap(),
         ],
@@ -394,7 +408,7 @@ async fn test_claim_with_wrong_signature_instruction() {
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
     let eth_address = construct_eth_address(&secp_pubkey);
-    
+
     let user_token_account = Keypair::new();
     let message = [8u8; 30];
 
@@ -403,15 +417,17 @@ async fn test_claim_with_wrong_signature_instruction() {
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
-    
+
     let (base_acc, address_to_create, tokens_amount) = prepare_claim(
-        &mut program_context, 
-        mint_account, rent, 
-        mint_authority, 
-        eth_address, 
+        &mut program_context,
+        mint_account,
+        rent,
+        mint_authority,
+        eth_address,
         &user_token_account,
-    ).await;
-    
+    )
+    .await;
+
     let mut transaction = Transaction::new_with_payer(
         &[
             secp256_program_instruction,
@@ -420,7 +436,10 @@ async fn test_claim_with_wrong_signature_instruction() {
                 &address_to_create,
                 &user_token_account.pubkey(),
                 &base_acc,
-                instruction::Claim { eth_address, amount: 0},
+                instruction::Claim {
+                    eth_address,
+                    amount: 0,
+                },
             )
             .unwrap(),
         ],

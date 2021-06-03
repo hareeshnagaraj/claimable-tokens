@@ -1,10 +1,6 @@
 //! Program state processor
 
-use crate::{
-    error::{to_claimable_tokens_error, ClaimableProgramError},
-    instruction::ClaimableProgramInstruction,
-    utils::program::PubkeyPatterns,
-};
+use crate::{error::{to_claimable_tokens_error, ClaimableProgramError}, instruction::ClaimableProgramInstruction, utils::program::{EthereumPubkey, get_address_pair}};
 use borsh::BorshDeserialize;
 use solana_program::{
     account_info::next_account_info,
@@ -19,34 +15,28 @@ use solana_program::{
     sysvar::rent::Rent,
     sysvar::Sysvar,
 };
+use std::mem::size_of;
 
 /// Program state handler.
-pub struct Processor {}
-impl Processor {
-    /// Ethereum public key size
-    pub const ETH_ADDRESS_SIZE: usize = 20;
+pub struct Processor;
 
+impl Processor {
     #[allow(clippy::too_many_arguments)]
     fn create_account<'a>(
-        program_id: &Pubkey,
+        _program_id: &Pubkey,
         funder: AccountInfo<'a>,
         account_to_create: AccountInfo<'a>,
         mint_key: &Pubkey,
         base: AccountInfo<'a>,
-        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
+        eth_address: EthereumPubkey,
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
-        base.key
-            .program_address_generated_correct(mint_key, program_id)?;
-
-        let seed = bs58::encode(eth_address).into_string();
-
-        let (_, bump_seed) =
-            account_to_create
-                .key
-                .derived_right(mint_key, &seed, program_id, &spl_token::id())?;
-
+        let ((gbase, bump_seed),(_, seed)) = get_address_pair(mint_key, eth_address)?;
+        if *base.key != gbase {
+            return Err(ProgramError::InvalidSeeds);
+        }
+        
         let signature = &[&mint_key.to_bytes()[..32], &[bump_seed]];
 
         invoke_signed(
@@ -54,7 +44,7 @@ impl Processor {
                 &funder.key,
                 &account_to_create.key,
                 &base.key,
-                &seed,
+                seed.as_str(),
                 required_lamports,
                 space,
                 &spl_token::id(),
@@ -81,22 +71,24 @@ impl Processor {
         )
     }
 
+    /// Transfer tokens from source to destination
+    ///
+    /// NOTE: if amount is 0 transfer all token otherwise transfer specified value
     fn token_transfer<'a>(
         source: AccountInfo<'a>,
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
-        program_id: &Pubkey,
-        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
+        _program_id: &Pubkey,
+        eth_address: EthereumPubkey,
         amount: u64,
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let seed = bs58::encode(eth_address).into_string();
+        let ((_, bump_seed),(derived, _)) = get_address_pair(&source_data.mint, eth_address)?;
+        if *source.key != derived {
+            return Err(ProgramError::InvalidSeeds);
+        }
 
-        let (_, bump_seed) =
-            source
-                .key
-                .derived_right(&source_data.mint, &seed, program_id, &spl_token::id())?;
         let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
         let signers = &[&authority_signature_seeds[..]];
 
@@ -106,34 +98,39 @@ impl Processor {
             source_data.amount
         };
 
-        let tx = spl_token::instruction::transfer(
-            &spl_token::id(),
-            source.key,
-            destination.key,
-            authority.key,
-            &[&authority.key],
-            debit_amount,
-        )?;
-        invoke_signed(&tx, &[source, destination, authority], signers)
+        invoke_signed(
+            &spl_token::instruction::transfer(
+                &spl_token::id(),
+                source.key,
+                destination.key,
+                authority.key,
+                &[&authority.key],
+                debit_amount,
+            )?,
+            &[source, destination, authority],
+            signers,
+        )
     }
 
+    /// Checks that message inside instruction was signed by expected signer
+    /// and it expected message
     fn validate_eth_signature(
-        expected_signer: [u8; Self::ETH_ADDRESS_SIZE],
-        message: &[u8],
+        expected_signer: &EthereumPubkey,
+        expected_message: &[u8],
         secp_instruction_data: Vec<u8>,
     ) -> Result<(), ProgramError> {
         let eth_address_offset = 12;
         let instruction_signer = secp_instruction_data
-            [eth_address_offset..eth_address_offset + Self::ETH_ADDRESS_SIZE]
+            [eth_address_offset..eth_address_offset + size_of::<EthereumPubkey>()]
             .to_vec();
         if instruction_signer != expected_signer {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
         }
 
         //NOTE: meta (12) + address (20) + signature (65) = 97
-        let message_data_offset = 97; 
+        let message_data_offset = 97;
         let instruction_message = secp_instruction_data[message_data_offset..].to_vec();
-        if instruction_message != *message {
+        if instruction_message != *expected_message {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
         }
 
@@ -141,21 +138,18 @@ impl Processor {
     }
 
     /// Initialize user bank
-    pub fn process_init_instruction(
+    pub fn process_init_instruction<'a>(
         program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
+        funder_account_info: &AccountInfo<'a>,
+        mint_account_info: &AccountInfo<'a>,
+        base_account_info: &AccountInfo<'a>,
+        acc_to_create_info: &AccountInfo<'a>,
+        rent_account_info: &AccountInfo<'a>,
+        rent: &Rent,
+        eth_address: EthereumPubkey,
     ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
-        let funder_account_info = next_account_info(account_info_iter)?;
-        let mint_account_info = next_account_info(account_info_iter)?;
-        let base_account_info = next_account_info(account_info_iter)?;
-        let acc_to_create_info = next_account_info(account_info_iter)?;
-        let rent_account_info = next_account_info(account_info_iter)?;
-        let rent = &Rent::from_account_info(rent_account_info)?;
-
         // check that mint is initialized
-        let _mint = spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
+        spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
 
         Self::create_account(
             program_id,
@@ -176,45 +170,53 @@ impl Processor {
         )
     }
 
-    /// Claim user tokens
-    pub fn process_claim_instruction(
-        program_id: &Pubkey,
-        accounts: &[AccountInfo],
-        eth_address: [u8; Self::ETH_ADDRESS_SIZE],
-        amount: u64,
+    /// Checks that the user signed message with his ethereum private key
+    fn check_ethereum_sign(
+        instruction_info: &AccountInfo,
+        expected_signer: &EthereumPubkey,
+        expected_message: &[u8],
     ) -> ProgramResult {
-        let account_info_iter = &mut accounts.iter();
-        let banks_token_account_info = next_account_info(account_info_iter)?;
-        let users_token_account_info = next_account_info(account_info_iter)?;
-        let authority_account_info = next_account_info(account_info_iter)?;
-        let instruction_info = next_account_info(account_info_iter)?;
         let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
 
-        // check that in this transaction also contains Secp256 program call
+        // instruction can't be first in transaction
+        // because must follow after `new_secp256k1_instruction`
         if index == 0 {
             return Err(ClaimableProgramError::Secp256InstructionLosing.into());
         }
 
-        // Instruction data of Secp256 program call
-        let secp_instruction = sysvar::instructions::load_instruction_at(
+        // load previous instruction
+        let instruction = sysvar::instructions::load_instruction_at(
             (index - 1) as usize,
             &instruction_info.data.borrow(),
         )
         .map_err(to_claimable_tokens_error)?;
 
-        if secp_instruction.program_id != secp256k1_program::id() {
+        // is that instruction is `new_secp256k1_instruction`
+        if instruction.program_id != secp256k1_program::id() {
             return Err(ClaimableProgramError::Secp256InstructionLosing.into());
         }
 
-        Self::validate_eth_signature(
-            eth_address,
-            &users_token_account_info.key.to_bytes(),
-            secp_instruction.data,
-        )?;
+        Self::validate_eth_signature(expected_signer, expected_message, instruction.data)
+    }
 
+    /// Claim user tokens
+    pub fn process_claim_instruction<'a>(
+        program_id: &Pubkey,
+        banks_token_account_info: &AccountInfo<'a>,
+        destination_account_info: &AccountInfo<'a>,
+        authority_account_info: &AccountInfo<'a>,
+        instruction_info: &AccountInfo<'a>,
+        eth_address: EthereumPubkey,
+        amount: u64,
+    ) -> ProgramResult {
+        Self::check_ethereum_sign(
+            &instruction_info,
+            &eth_address,
+            &destination_account_info.key.to_bytes(),
+        )?;
         Self::token_transfer(
             banks_token_account_info.clone(),
-            users_token_account_info.clone(),
+            destination_account_info.clone(),
             authority_account_info.clone(),
             program_id,
             eth_address,
@@ -229,14 +231,46 @@ impl Processor {
         input: &[u8],
     ) -> ProgramResult {
         let instruction = ClaimableProgramInstruction::try_from_slice(input)?;
+        let account_info_iter = &mut accounts.iter();
         match instruction {
             ClaimableProgramInstruction::CreateTokenAccount(eth_address) => {
                 msg!("Instruction: CreateTokenAccount");
-                Self::process_init_instruction(program_id, accounts, eth_address.eth_address)
+
+                let funder_account_info = next_account_info(account_info_iter)?;
+                let mint_account_info = next_account_info(account_info_iter)?;
+                let base_account_info = next_account_info(account_info_iter)?;
+                let acc_to_create_info = next_account_info(account_info_iter)?;
+                let rent_account_info = next_account_info(account_info_iter)?;
+                let rent = &Rent::from_account_info(rent_account_info)?;
+
+                Self::process_init_instruction(
+                    program_id,
+                    funder_account_info,
+                    mint_account_info,
+                    base_account_info,
+                    acc_to_create_info,
+                    rent_account_info,
+                    rent,
+                    eth_address.eth_address,
+                )
             }
             ClaimableProgramInstruction::Claim(instruction) => {
                 msg!("Instruction: Claim");
-                Self::process_claim_instruction(program_id, accounts, instruction.eth_address, instruction.amount)
+
+                let banks_token_account_info = next_account_info(account_info_iter)?;
+                let destination_account_info = next_account_info(account_info_iter)?;
+                let authority_account_info = next_account_info(account_info_iter)?;
+                let instruction_info = next_account_info(account_info_iter)?;
+
+                Self::process_claim_instruction(
+                    program_id,
+                    banks_token_account_info,
+                    destination_account_info,
+                    authority_account_info,
+                    instruction_info,
+                    instruction.eth_address,
+                    instruction.amount,
+                )
             }
         }
     }
