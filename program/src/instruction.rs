@@ -1,6 +1,6 @@
 //! Instruction types
 
-use crate::{utils::program::{EthereumPubkey, PubkeyPatterns}};
+use crate::{utils::program::{EthereumPubkey, get_address_pair}};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -57,11 +57,8 @@ pub fn init(
     mint: &Pubkey,
     ethereum_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
-    let (base_acc, _, acc_to_create) = mint.get_pda(
-        &bs58::encode(ethereum_address.eth_address).into_string(),
-        program_id,
-        &spl_token::id(),
-    )?;
+    let ((base_acc, _),(acc_to_create, _)) = get_address_pair(mint, ethereum_address.eth_address)?;
+
     let data = ClaimableProgramInstruction::CreateTokenAccount(ethereum_address).try_to_vec()?;
     let accounts = vec![
         AccountMeta::new(*fee_pair, true),

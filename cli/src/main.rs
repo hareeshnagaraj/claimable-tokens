@@ -38,10 +38,12 @@ fn claim(
     destination: Option<Pubkey>,
     amount: u64,
 ) -> Result<()> {
-    let instructions = vec![];
+    let mut instructions = vec![];
 
     let eth_address = PublicKey::from_secret_key(&secret_key).serialize_compressed();
-    let ((base, _), (derived, _)) = get_address_pair(&mint, eth_address)?;
+    let mut conv_ath_address = [0u8; 20]; 
+    conv_ath_address.copy_from_slice(&eth_address[..=20]);
+    let ((base, _), (derived, _)) = get_address_pair(&mint, conv_ath_address)?;
 
     let user_acc = get_associated_token_address(&config.owner.pubkey(), &mint);
     if destination.is_none() {
@@ -65,7 +67,7 @@ fn claim(
             &destination.or(Some(user_acc)).unwrap(),
             &base,
             Claim {
-                eth_address,
+                eth_address: conv_ath_address,
                 amount,
             },
         )?,

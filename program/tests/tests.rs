@@ -1,6 +1,6 @@
 #![cfg(feature = "test-bpf")]
 
-use claimable_tokens::utils::program::EthereumPubkey;
+use claimable_tokens::utils::program::{EthereumPubkey, get_address_pair};
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
@@ -190,14 +190,7 @@ async fn test_init_instruction() {
     .await
     .unwrap();
 
-    let (_, _, address_to_create) = mint_account
-        .pubkey()
-        .get_pda(
-            &bs58::encode(eth_address).into_string(),
-            &id(),
-            &spl_token::id(),
-        )
-        .unwrap();
+    let ((_, _),(address_to_create, _)) = get_address_pair(&mint_account.pubkey(), eth_address).unwrap();
 
     init_user_bank(&mut program_context, &mint_account.pubkey(), eth_address)
         .await
@@ -227,14 +220,9 @@ async fn prepare_claim(
     )
     .await
     .unwrap();
-    let (base_acc, _, address_to_create) = mint_account
-        .pubkey()
-        .get_pda(
-            &bs58::encode(eth_address).into_string(),
-            &id(),
-            &spl_token::id(),
-        )
-        .unwrap();
+
+    let ((base_acc, _),(address_to_create, _)) = get_address_pair(&mint_account.pubkey(), eth_address).unwrap();
+
     init_user_bank(program_context, &mint_account.pubkey(), eth_address)
         .await
         .unwrap();
