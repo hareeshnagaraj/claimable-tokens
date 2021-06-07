@@ -1,6 +1,10 @@
 //! Program state processor
 
-use crate::{error::{to_claimable_tokens_error, ClaimableProgramError}, instruction::ClaimableProgramInstruction, utils::program::{EthereumPubkey, get_address_pair}};
+use crate::{
+    error::{to_claimable_tokens_error, ClaimableProgramError},
+    instruction::ClaimableProgramInstruction,
+    utils::program::{get_address_pair, EthereumPubkey},
+};
 use borsh::BorshDeserialize;
 use solana_program::{
     account_info::next_account_info,
@@ -32,19 +36,19 @@ impl Processor {
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
-        let ((gbase, bump_seed),(_, seed)) = get_address_pair(mint_key, eth_address)?;
-        if *base.key != gbase {
+        let pair = get_address_pair(mint_key, eth_address)?;
+        if *base.key != pair.base.address {
             return Err(ProgramError::InvalidSeeds);
         }
-        
-        let signature = &[&mint_key.to_bytes()[..32], &[bump_seed]];
+
+        let signature = &[&mint_key.to_bytes()[..32], &[pair.base.seed]];
 
         invoke_signed(
             &system_instruction::create_account_with_seed(
                 &funder.key,
                 &account_to_create.key,
                 &base.key,
-                seed.as_str(),
+                pair.derive.seed.as_str(),
                 required_lamports,
                 space,
                 &spl_token::id(),
@@ -84,12 +88,12 @@ impl Processor {
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let ((_, bump_seed),(derived, _)) = get_address_pair(&source_data.mint, eth_address)?;
-        if *source.key != derived {
+        let pair = get_address_pair(&source_data.mint, eth_address)?;
+        if *source.key != pair.derive.address {
             return Err(ProgramError::InvalidSeeds);
         }
 
-        let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[bump_seed]];
+        let authority_signature_seeds = [&source_data.mint.to_bytes()[..32], &[pair.base.seed]];
         let signers = &[&authority_signature_seeds[..]];
 
         let debit_amount = if amount != 0 {
@@ -138,6 +142,7 @@ impl Processor {
     }
 
     /// Initialize user bank
+    #[allow(clippy::too_many_arguments)]
     pub fn process_init_instruction<'a>(
         program_id: &Pubkey,
         funder_account_info: &AccountInfo<'a>,

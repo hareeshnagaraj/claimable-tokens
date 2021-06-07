@@ -9,18 +9,16 @@ use clap::{
     crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, SubCommand,
 };
 
-use secp256k1::PublicKey;
 use solana_clap_utils::{
     fee_payer::fee_payer_arg,
     input_parsers::pubkey_of,
     input_validators::{is_pubkey, is_url_or_moniker, is_valid_signer},
     keypair::signer_from_path,
 };
-use solana_client::{rpc_client::RpcClient, rpc_response::Response};
+use solana_client::{client_error::ClientError, rpc_client::RpcClient, rpc_response::Response};
 use solana_sdk::{
     commitment_config::CommitmentConfig, pubkey::Pubkey,
-    secp256k1_instruction::new_secp256k1_instruction, signature::Signer, 
-    transaction::Transaction,
+    secp256k1_instruction::new_secp256k1_instruction, signature::Signer, transaction::Transaction,
 };
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
 use std::mem::size_of;
@@ -31,44 +29,54 @@ struct Config {
     rpc_client: RpcClient,
 }
 
+fn conver_amount(amount: f64) -> u64 {
+    todo!()
+}
+
 fn claim(
     config: Config,
     secret_key: secp256k1::SecretKey,
     mint: Pubkey,
-    destination: Option<Pubkey>,
-    amount: u64,
+    recipient: Option<Pubkey>,
+    amount: f64,
 ) -> Result<()> {
     let mut instructions = vec![];
 
-    let eth_address = PublicKey::from_secret_key(&secret_key).serialize_compressed();
-    let mut conv_ath_address = [0u8; 20]; 
+    let eth_address = secp256k1::PublicKey::from_secret_key(&secret_key).serialize_compressed();
+    let mut conv_ath_address = [0u8; 20];
     conv_ath_address.copy_from_slice(&eth_address[..=20]);
-    let ((base, _), (derived, _)) = get_address_pair(&mint, conv_ath_address)?;
+    let pair = get_address_pair(&mint, conv_ath_address)?;
 
-    let user_acc = get_associated_token_address(&config.owner.pubkey(), &mint);
-    if destination.is_none() {
-        if let Response { value: None, .. } = config
-            .rpc_client
-            .get_account_with_commitment(&user_acc, config.rpc_client.commitment())?
-        {
-            instructions.push(create_associated_token_account(
-                &config.fee_payer.pubkey(),
-                &config.owner.pubkey(),
-                &mint,
-            ));
-        }
-    }
+    let user_acc = recipient.map_or_else(
+        || -> Result<Pubkey, ClientError> {
+            let user_acc = get_associated_token_address(&config.owner.pubkey(), &mint);
+            // Checking if the associated token account unexist
+            // then we must add instruction to create it
+            if let Response { value: None, .. } = config
+                .rpc_client
+                .get_account_with_commitment(&user_acc, config.rpc_client.commitment())?
+            {
+                instructions.push(create_associated_token_account(
+                    &config.fee_payer.pubkey(),
+                    &config.owner.pubkey(),
+                    &mint,
+                ));
+            }
+            Ok(user_acc)
+        },
+        Ok,
+    )?;
 
     let instructions = &[
-        new_secp256k1_instruction(&secret_key, &derived.to_bytes()),
+        new_secp256k1_instruction(&secret_key, &pair.derive.address.to_bytes()),
         claimable_tokens::instruction::claim(
             &claimable_tokens::id(),
-            &derived,
-            &destination.or(Some(user_acc)).unwrap(),
-            &base,
+            &pair.derive.address,
+            &user_acc,
+            &pair.base.address,
             Claim {
                 eth_address: conv_ath_address,
-                amount,
+                amount: conver_amount(amount),
             },
         )?,
     ];
@@ -86,15 +94,16 @@ fn transfer(
     config: Config,
     ethereum_address: EthereumPubkey,
     mint: Pubkey,
-    amount: u64,
+    amount: f64,
 ) -> Result<()> {
     let mut instructions = vec![];
-    let mut signers = vec![];
 
-    let ((_, _), (derive, _)) = get_address_pair(&mint, ethereum_address)?;
+    let pair = get_address_pair(&mint, ethereum_address)?;
+    // Checking if the derived address of recipient unexist
+    // then we must add instruction to create it
     if let Response { value: None, .. } = config
         .rpc_client
-        .get_account_with_commitment(&derive, config.rpc_client.commitment())?
+        .get_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())?
     {
         instructions.push(claimable_tokens::instruction::init(
             &claimable_tokens::id(),
@@ -104,30 +113,31 @@ fn transfer(
                 eth_address: ethereum_address,
             },
         )?);
-        signers.push(config.fee_payer.as_ref());
     }
 
     let account = get_associated_token_address(&config.owner.pubkey(), &mint);
     instructions.push(spl_token::instruction::transfer(
         &spl_token::id(),
         &account,
-        &derive,
+        &pair.derive.address,
         &config.owner.pubkey(),
         &[],
-        amount,
+        conver_amount(amount),
     )?);
-    signers.push(config.owner.as_ref());
 
     let mut tx =
         Transaction::new_with_payer(instructions.as_slice(), Some(&config.fee_payer.pubkey()));
     let (recent_blockhash, _) = config.rpc_client.get_recent_blockhash()?;
-    tx.sign(&signers, recent_blockhash);
+    tx.sign(
+        &[config.fee_payer.as_ref(), config.owner.as_ref()],
+        recent_blockhash,
+    );
     config
         .rpc_client
         .send_and_confirm_transaction_with_spinner(&tx)?;
 
-    println!("Transfer completed");
-    todo!()
+    println!("Transfer completed to recipient: {}", pair.derive.address);
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -184,19 +194,19 @@ fn main() -> Result<()> {
                         .value_name("ETHEREUM_ADDRESS")
                         .takes_value(true)
                         .required(true)
-                        .help("Recipient ethereum address"),
+                        .help("Recipient Ethereum address"),
                     Arg::with_name("mint")
                         .value_name("MINT_ADDRESS")
                         .takes_value(true)
                         .required(true)
-                        .help("Mint witch token we send"),
+                        .help("Mint for the token to send"),
                     Arg::with_name("amount")
                         .value_name("NUMBER")
                         .takes_value(true)
                         .required(true)
                         .help("Amount to send"),
                 ])
-                .help("Transfer different tokens to ethereum users account in solana network"),
+                .help("Transfer Solana token claimable by Ethereum users"),
             SubCommand::with_name("claim").args(&[
                 Arg::with_name("mint")
                     .validator(is_pubkey)
@@ -209,17 +219,17 @@ fn main() -> Result<()> {
                     .value_name("ETHEREUM_PRIVATE_KEY")
                     .takes_value(true)
                     .required(true)
-                    .help("Ethereum private key for sign transaction"),
+                    .help("Ethereum private key to sign the transaction"),
                 Arg::with_name("destination")
                     .validator(is_pubkey)
                     .value_name("SOLANA_ADDRESS")
                     .takes_value(true)
-                    .help("Solana transfer destination account"),
+                    .help("Recipient of transfer"),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
                     .takes_value(true)
                     .required(true)
-                    .help("Amount to send"),
+                    .help("Amount to claim"),
             ]),
         ])
         .get_matches();
@@ -264,37 +274,36 @@ fn main() -> Result<()> {
     match matches.subcommand() {
         ("claim", Some(args)) => {
             let private_key = value_t!(args.value_of("private_key"), String)?;
-            let pk_slice: [u8; 32] = private_key.as_bytes().try_into().expect(
-                format!(
+            let pk_array: [u8; 32] = private_key.as_bytes().try_into().unwrap_or_else(|_| {
+                panic!(
                     "Incorrect private key. Because len {}, but must be {}.",
                     private_key.len(),
-                    8,
+                    8
                 )
-                .as_str(),
-            );
-            let conv_eth_pk = secp256k1::SecretKey::parse(&pk_slice)?;
+            });
+            let conv_eth_pk = secp256k1::SecretKey::parse(&pk_array)?;
 
             let mint = pubkey_of(args, "mint").unwrap();
             let destination = pubkey_of(args, "destination");
-            let amount = value_t!(args.value_of("amount"), u64)
+            let amount = value_t!(args.value_of("amount"), f64)
                 .expect("Can't parse amount, it is must present like integer");
 
             claim(config, conv_eth_pk, mint, destination, amount)?
         }
         ("transfer", Some(args)) => {
             let ethereum_address = value_t!(args.value_of("address"), String)?;
-            let conv_eth_add: EthereumPubkey = ethereum_address.as_bytes().try_into().expect(
-                format!(
-                    "Incorrect ethereum address {}. Because len {}, but must be {}.",
-                    ethereum_address,
-                    ethereum_address.len(),
-                    size_of::<EthereumPubkey>()
-                )
-                .as_str(),
-            );
+            let conv_eth_add: EthereumPubkey =
+                ethereum_address.as_bytes().try_into().unwrap_or_else(|_| {
+                    panic!(
+                        "Incorrect ethereum address {}. Because len {}, but must be {}.",
+                        ethereum_address,
+                        ethereum_address.len(),
+                        size_of::<EthereumPubkey>()
+                    )
+                });
 
             let mint = pubkey_of(args, "mint").unwrap();
-            let amount = value_t!(args.value_of("amount"), u64)
+            let amount = value_t!(args.value_of("amount"), f64)
                 .expect("Can't parse amount, it is must present like integer");
 
             transfer(config, conv_eth_add, mint, amount)?
