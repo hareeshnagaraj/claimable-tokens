@@ -35,7 +35,7 @@ struct Config {
 fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::PublicKey> {
     let mut value = value_t!(matches.value_of(name), String)?;
     // handle string with front-going hex prefix
-    if value.len() == secp256k1::util::FULL_PUBLIC_KEY_SIZE + 2 || value.starts_with("0x") {
+    if value.len() == secp256k1::util::FULL_PUBLIC_KEY_SIZE + 2 && value.starts_with("0x") {
         value.replace_range(..=1, "");
     }
     let decoded_pk = &hex::decode(value.as_str())?;
@@ -46,7 +46,7 @@ fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::Publ
 fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::SecretKey> {
     let mut value = value_t!(matches.value_of(name), String)?;
     // handle string with front-going hex prefix
-    if value.len() == secp256k1::util::SECRET_KEY_SIZE + 2 || value.starts_with("0x") {
+    if value.len() == secp256k1::util::SECRET_KEY_SIZE + 2 && value.starts_with("0x") {
         value.replace_range(..=1, "");
     }
     let decoded_pk = &hex::decode(value.as_str())?;
