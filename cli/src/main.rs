@@ -3,9 +3,7 @@ use claimable_tokens::{
     instruction::{Claim, CreateTokenAccount},
     utils::program::get_address_pair,
 };
-use clap::{
-    crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, SubCommand,
-};
+use clap::{App, AppSettings, Arg, ArgMatches, SubCommand, crate_description, crate_name, crate_version, value_t};
 
 use solana_clap_utils::{
     fee_payer::fee_payer_arg,
@@ -29,6 +27,20 @@ struct Config {
     owner: Box<dyn Signer>,
     fee_payer: Box<dyn Signer>,
     rpc_client: RpcClient,
+}
+
+fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::PublicKey> {
+    let value = value_t!(matches.value_of(name), String)?;
+    let decoded_pk = &hex::decode(value.as_str())?;
+    let pk = secp256k1::PublicKey::parse_slice(decoded_pk.as_slice(), None)?;
+    Ok(pk)
+}
+
+fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::SecretKey> {
+    let value = value_t!(matches.value_of(name), String)?;
+    let decoded_pk = &hex::decode(value.as_str())?;
+    let sk = secp256k1::SecretKey::parse_slice(decoded_pk)?;
+    Ok(sk)
 }
 
 fn claim(
@@ -276,26 +288,53 @@ fn main() -> Result<()> {
 
     match matches.subcommand() {
         ("claim", Some(args)) => {
-            let private_key = value_t!(args.value_of("private_key"), String)?;
-            let conv_eth_pk = secp256k1::SecretKey::parse_slice(private_key.as_bytes())?;
-
+            let privkey = eth_seckey_of(args, "private_key")?;
             let mint = pubkey_of(args, "mint").unwrap();
             let recipient = pubkey_of(args, "recipient");
             let amount = value_t!(args.value_of("amount"), f64)?;
 
-            claim(config, conv_eth_pk, mint, recipient, amount)?
+            claim(config, privkey, mint, recipient, amount)?
         }
         ("transfer", Some(args)) => {
-            let ethereum_address = value_t!(args.value_of("recipient"), String)?;
-            let conv_eth_add =
-                secp256k1::PublicKey::parse_slice(ethereum_address.as_bytes(), None)?;
-
+            let pubkey = eth_pubkey_of(args, "recipient")?;
             let mint = pubkey_of(args, "mint").unwrap();
             let amount = value_t!(args.value_of("amount"), f64)?;
 
-            transfer(config, conv_eth_add, mint, amount)?
+            transfer(config, pubkey, mint, amount)?
         }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+#[test]
+fn test_parse_eth_pv() {
+    use std::str;
+
+    const INPUT_PV: &str = "09e910621c2e988e9f7f6ffcd7024f54ec1461fa6e86a4b545e9e1fe21c28866";
+    const EXPECTED_PUB: &str = "048e66b3e549818ea2cb354fb70749f6c8de8fa484f7530fc447d5fe80a1c424e4f5ae648d648c980ae7095d1efad87161d83886ca4b6c498ac22a93da5099014a";
+    
+    let private = secp256k1::SecretKey::parse_slice(&hex::decode(INPUT_PV).unwrap().as_slice()).unwrap();
+    let public = secp256k1::PublicKey::from_secret_key(&private);
+    let serialized = public.serialize();
+    let str_pub = hex::decode(EXPECTED_PUB).unwrap();
+    assert_eq!(&str_pub, serialized.as_ref());
+}
+
+#[test]
+fn test_parse_eth_pk() {
+    use std::str;
+    use secp256k1::*;
+
+    const EXPECTED_PV: &str = "09e910621c2e988e9f7f6ffcd7024f54ec1461fa6e86a4b545e9e1fe21c28866";
+    const INPUT_PUB: &str = "048e66b3e549818ea2cb354fb70749f6c8de8fa484f7530fc447d5fe80a1c424e4f5ae648d648c980ae7095d1efad87161d83886ca4b6c498ac22a93da5099014a";
+    
+    let decoded_pk = &hex::decode(INPUT_PUB).unwrap();
+    let public = PublicKey::parse_slice(decoded_pk.as_slice(), None).unwrap();
+
+    let decoded_pv = hex::decode(EXPECTED_PV).unwrap();
+    let private = SecretKey::parse_slice(decoded_pv.as_slice()).unwrap();
+    let derived_pk = PublicKey::from_secret_key(&private);
+
+    assert_eq!(public, derived_pk);
 }

@@ -18,3 +18,4 @@ claimable-tokens = { path="../program", features = [ "no-entrypoint" ] }
 spl-token = { git="https://github.com/solana-labs/solana-program-library", features = [ "no-entrypoint" ] }
 libsecp256k1 = "0.3.5"
 spl-associated-token-account = "1.0.2"
+hex = "0.4.3"
