@@ -17,20 +17,17 @@ use solana_clap_utils::{
 };
 use solana_client::{client_error::ClientError, rpc_client::RpcClient, rpc_response::Response};
 use solana_sdk::{
-    commitment_config::CommitmentConfig, pubkey::Pubkey,
+    commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
     secp256k1_instruction::new_secp256k1_instruction, signature::Signer, transaction::Transaction,
 };
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
+use spl_token::state::Mint;
 use std::mem::size_of;
 
 struct Config {
     owner: Box<dyn Signer>,
     fee_payer: Box<dyn Signer>,
     rpc_client: RpcClient,
-}
-
-fn conver_amount(amount: f64) -> u64 {
-    todo!()
 }
 
 fn claim(
@@ -67,6 +64,9 @@ fn claim(
         Ok,
     )?;
 
+    let mint_raw_data = config.rpc_client.get_account_data(&mint)?;
+    let mint_data = Mint::unpack(mint_raw_data.as_ref())?;
+
     let instructions = &[
         new_secp256k1_instruction(&secret_key, &pair.derive.address.to_bytes()),
         claimable_tokens::instruction::claim(
@@ -76,7 +76,7 @@ fn claim(
             &pair.base.address,
             Claim {
                 eth_address: conv_ath_address,
-                amount: conver_amount(amount),
+                amount: spl_token::ui_amount_to_amount(amount, mint_data.decimals),
             },
         )?,
     ];
@@ -115,6 +115,9 @@ fn transfer(
         )?);
     }
 
+    let mint_raw_data = config.rpc_client.get_account_data(&mint)?;
+    let mint_data = Mint::unpack(mint_raw_data.as_ref())?;
+
     let account = get_associated_token_address(&config.owner.pubkey(), &mint);
     instructions.push(spl_token::instruction::transfer(
         &spl_token::id(),
@@ -122,7 +125,7 @@ fn transfer(
         &pair.derive.address,
         &config.owner.pubkey(),
         &[],
-        conver_amount(amount),
+        spl_token::ui_amount_to_amount(amount, mint_data.decimals),
     )?);
 
     let mut tx =
@@ -190,7 +193,7 @@ fn main() -> Result<()> {
         .subcommands(vec![
             SubCommand::with_name("transfer")
                 .args(&[
-                    Arg::with_name("address")
+                    Arg::with_name("recipient")
                         .value_name("ETHEREUM_ADDRESS")
                         .takes_value(true)
                         .required(true)
@@ -213,14 +216,15 @@ fn main() -> Result<()> {
                     .value_name("MINT_ADDRESS")
                     .takes_value(true)
                     .required(true)
-                    .help("Mint for the token to send"),
+                    .help("Mint for token to claim"),
                 Arg::with_name("private_key")
+                    .long("private-key")
                     .validator(is_pubkey)
                     .value_name("ETHEREUM_PRIVATE_KEY")
                     .takes_value(true)
                     .required(true)
                     .help("Ethereum private key to sign the transaction"),
-                Arg::with_name("destination")
+                Arg::with_name("recipient")
                     .validator(is_pubkey)
                     .value_name("SOLANA_ADDRESS")
                     .takes_value(true)
@@ -284,14 +288,14 @@ fn main() -> Result<()> {
             let conv_eth_pk = secp256k1::SecretKey::parse(&pk_array)?;
 
             let mint = pubkey_of(args, "mint").unwrap();
-            let destination = pubkey_of(args, "destination");
+            let recipient = pubkey_of(args, "recipient");
             let amount = value_t!(args.value_of("amount"), f64)
                 .expect("Can't parse amount, it is must present like integer");
 
-            claim(config, conv_eth_pk, mint, destination, amount)?
+            claim(config, conv_eth_pk, mint, recipient, amount)?
         }
         ("transfer", Some(args)) => {
-            let ethereum_address = value_t!(args.value_of("address"), String)?;
+            let ethereum_address = value_t!(args.value_of("recipient"), String)?;
             let conv_eth_add: EthereumPubkey =
                 ethereum_address.as_bytes().try_into().unwrap_or_else(|_| {
                     panic!(
