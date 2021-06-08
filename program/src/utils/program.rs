@@ -4,7 +4,7 @@
 use solana_program::pubkey::{Pubkey, PubkeyError};
 
 /// Represent compressed ethereum pubkey
-pub type EthereumPubkey = [u8; 20];
+pub type HashedEthereumPubkey = [u8; 20];
 
 /// Base PDA related with some mint
 pub struct Base {
@@ -28,10 +28,10 @@ pub struct AddressPair {
 /// with seed
 pub fn get_address_pair(
     mint: &Pubkey,
-    eth_address: EthereumPubkey,
+    hashed_eth_pk: HashedEthereumPubkey,
 ) -> Result<AddressPair, PubkeyError> {
     let (base_pk, base_seed) = get_base_address(mint);
-    let (derived_pk, derive_seed) = get_derived_address(&base_pk.clone(), eth_address)?;
+    let (derived_pk, derive_seed) = get_derived_address(&base_pk.clone(), hashed_eth_pk)?;
     Ok(AddressPair {
         base: Base {
             address: base_pk,
@@ -54,8 +54,8 @@ pub fn get_base_address(mint: &Pubkey) -> (Pubkey, u8) {
 /// ethereum account and it seed
 pub fn get_derived_address(
     base: &Pubkey,
-    eth_address: EthereumPubkey,
+    hashed_eth_pk: HashedEthereumPubkey,
 ) -> Result<(Pubkey, String), PubkeyError> {
-    let seed = bs58::encode(eth_address).into_string();
+    let seed = bs58::encode(hashed_eth_pk).into_string();
     Pubkey::create_with_seed(&base, seed.as_str(), &spl_token::id()).map(|i| (i, seed))
 }

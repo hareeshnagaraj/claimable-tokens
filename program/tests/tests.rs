@@ -1,20 +1,19 @@
 #![cfg(feature = "test-bpf")]
 
-use claimable_tokens::utils::program::{get_address_pair, EthereumPubkey};
+use claimable_tokens::utils::program::{get_address_pair, HashedEthereumPubkey};
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
-use sha3::{Digest, Keccak256};
 use solana_program::{program_pack::Pack, pubkey::Pubkey, system_instruction};
 use solana_program_test::*;
 use solana_sdk::{
     account::Account,
-    secp256k1_instruction,
+    secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction},
     signature::{Keypair, Signer},
     transaction::Transaction,
     transport::TransportError,
 };
-
+// construct_eth_pubkey
 pub fn program_test() -> ProgramTest {
     ProgramTest::new(
         "claimable_tokens",
@@ -30,13 +29,6 @@ pub async fn get_account(program_context: &mut ProgramTestContext, pubkey: &Pubk
         .await
         .expect("account not found")
         .expect("account empty")
-}
-
-fn construct_eth_address(pubkey: &PublicKey) -> EthereumPubkey {
-    let mut addr = [0u8; std::mem::size_of::<EthereumPubkey>()];
-    addr.copy_from_slice(&Keccak256::digest(&pubkey.serialize()[1..])[12..]);
-    assert_eq!(addr.len(), std::mem::size_of::<EthereumPubkey>());
-    addr
 }
 
 async fn create_token_account(
@@ -148,14 +140,14 @@ pub async fn mint_tokens_to(
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
     mint: &Pubkey,
-    eth_address: EthereumPubkey,
+    hashed_eth_pk: HashedEthereumPubkey,
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
             &id(),
             &program_context.payer.pubkey(),
             mint,
-            instruction::CreateTokenAccount { eth_address },
+            instruction::CreateTokenAccount { hashed_eth_pk },
         )
         .unwrap()],
         Some(&program_context.payer.pubkey()),
@@ -177,7 +169,7 @@ async fn test_init_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let eth_address = construct_eth_address(&secp_pubkey);
+    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -190,9 +182,9 @@ async fn test_init_instruction() {
     .await
     .unwrap();
 
-    let pair = get_address_pair(&mint_account.pubkey(), eth_address).unwrap();
+    let pair = get_address_pair(&mint_account.pubkey(), hashed_eth_pk).unwrap();
 
-    init_user_bank(&mut program_context, &mint_account.pubkey(), eth_address)
+    init_user_bank(&mut program_context, &mint_account.pubkey(), hashed_eth_pk)
         .await
         .unwrap();
 
@@ -209,7 +201,7 @@ async fn prepare_claim(
     mint_account: Keypair,
     rent: solana_program::rent::Rent,
     mint_authority: Keypair,
-    eth_address: EthereumPubkey,
+    eth_address: HashedEthereumPubkey,
     user_token_account: &Keypair,
 ) -> (Pubkey, Pubkey, u64) {
     create_mint(
@@ -258,13 +250,12 @@ async fn test_claim_all_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let eth_address = construct_eth_address(&secp_pubkey);
+    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = user_token_account.pubkey().to_bytes();
 
-    let secp256_program_instruction =
-        secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
+    let secp256_program_instruction = new_secp256k1_instruction(&priv_key, &message);
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -273,7 +264,7 @@ async fn test_claim_all_instruction() {
         mint_account,
         rent,
         mint_authority,
-        eth_address,
+        hashed_eth_pk,
         &user_token_account,
     )
     .await;
@@ -287,7 +278,7 @@ async fn test_claim_all_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    eth_address,
+                    hashed_eth_pk,
                     amount: 0,
                 },
             )
@@ -326,13 +317,12 @@ async fn test_claim_with_amount_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let eth_address = construct_eth_address(&secp_pubkey);
+    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = user_token_account.pubkey().to_bytes();
 
-    let secp256_program_instruction =
-        secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
+    let secp256_program_instruction = new_secp256k1_instruction(&priv_key, &message);
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -341,7 +331,7 @@ async fn test_claim_with_amount_instruction() {
         mint_account,
         rent,
         mint_authority,
-        eth_address,
+        hashed_eth_pk,
         &user_token_account,
     )
     .await;
@@ -356,7 +346,7 @@ async fn test_claim_with_amount_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    eth_address,
+                    hashed_eth_pk,
                     amount: transfer_amount,
                 },
             )
@@ -395,13 +385,12 @@ async fn test_claim_with_wrong_signature_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let eth_address = construct_eth_address(&secp_pubkey);
+    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = [8u8; 30];
 
-    let secp256_program_instruction =
-        secp256k1_instruction::new_secp256k1_instruction(&priv_key, &message);
+    let secp256_program_instruction = new_secp256k1_instruction(&priv_key, &message);
 
     let mint_account = Keypair::new();
     let mint_authority = Keypair::new();
@@ -411,7 +400,7 @@ async fn test_claim_with_wrong_signature_instruction() {
         mint_account,
         rent,
         mint_authority,
-        eth_address,
+        hashed_eth_pk,
         &user_token_account,
     )
     .await;
@@ -425,7 +414,7 @@ async fn test_claim_with_wrong_signature_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    eth_address,
+                    hashed_eth_pk,
                     amount: 0,
                 },
             )

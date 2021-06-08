@@ -3,7 +3,7 @@
 use crate::{
     error::{to_claimable_tokens_error, ClaimableProgramError},
     instruction::ClaimableProgramInstruction,
-    utils::program::{get_address_pair, EthereumPubkey},
+    utils::program::{get_address_pair, HashedEthereumPubkey},
 };
 use borsh::BorshDeserialize;
 use solana_program::{
@@ -32,7 +32,7 @@ impl Processor {
         account_to_create: AccountInfo<'a>,
         mint_key: &Pubkey,
         base: AccountInfo<'a>,
-        eth_address: EthereumPubkey,
+        eth_address: HashedEthereumPubkey,
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
@@ -83,7 +83,7 @@ impl Processor {
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
         _program_id: &Pubkey,
-        eth_address: EthereumPubkey,
+        eth_address: HashedEthereumPubkey,
         amount: u64,
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
@@ -119,13 +119,13 @@ impl Processor {
     /// Checks that message inside instruction was signed by expected signer
     /// and it expected message
     fn validate_eth_signature(
-        expected_signer: &EthereumPubkey,
+        expected_signer: &HashedEthereumPubkey,
         expected_message: &[u8],
         secp_instruction_data: Vec<u8>,
     ) -> Result<(), ProgramError> {
         let eth_address_offset = 12;
         let instruction_signer = secp_instruction_data
-            [eth_address_offset..eth_address_offset + size_of::<EthereumPubkey>()]
+            [eth_address_offset..eth_address_offset + size_of::<HashedEthereumPubkey>()]
             .to_vec();
         if instruction_signer != expected_signer {
             return Err(ClaimableProgramError::SignatureVerificationFailed.into());
@@ -151,7 +151,7 @@ impl Processor {
         acc_to_create_info: &AccountInfo<'a>,
         rent_account_info: &AccountInfo<'a>,
         rent: &Rent,
-        eth_address: EthereumPubkey,
+        eth_address: HashedEthereumPubkey,
     ) -> ProgramResult {
         // check that mint is initialized
         spl_token::state::Mint::unpack(&mint_account_info.data.borrow())?;
@@ -178,7 +178,7 @@ impl Processor {
     /// Checks that the user signed message with his ethereum private key
     fn check_ethereum_sign(
         instruction_info: &AccountInfo,
-        expected_signer: &EthereumPubkey,
+        expected_signer: &HashedEthereumPubkey,
         expected_message: &[u8],
     ) -> ProgramResult {
         let index = sysvar::instructions::load_current_index(&instruction_info.data.borrow());
@@ -211,7 +211,7 @@ impl Processor {
         destination_account_info: &AccountInfo<'a>,
         authority_account_info: &AccountInfo<'a>,
         instruction_info: &AccountInfo<'a>,
-        eth_address: EthereumPubkey,
+        eth_address: HashedEthereumPubkey,
         amount: u64,
     ) -> ProgramResult {
         Self::check_ethereum_sign(
@@ -256,7 +256,7 @@ impl Processor {
                     acc_to_create_info,
                     rent_account_info,
                     rent,
-                    eth_address.eth_address,
+                    eth_address.hashed_eth_pk,
                 )
             }
             ClaimableProgramInstruction::Claim(instruction) => {
@@ -273,7 +273,7 @@ impl Processor {
                     destination_account_info,
                     authority_account_info,
                     instruction_info,
-                    instruction.eth_address,
+                    instruction.hashed_eth_pk,
                     instruction.amount,
                 )
             }

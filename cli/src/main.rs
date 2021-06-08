@@ -1,9 +1,7 @@
-use std::convert::TryInto;
-
 use anyhow::Result;
 use claimable_tokens::{
     instruction::{Claim, CreateTokenAccount},
-    utils::program::{get_address_pair, EthereumPubkey},
+    utils::program::get_address_pair,
 };
 use clap::{
     crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, SubCommand,
@@ -17,12 +15,15 @@ use solana_clap_utils::{
 };
 use solana_client::{client_error::ClientError, rpc_client::RpcClient, rpc_response::Response};
 use solana_sdk::{
-    commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey,
-    secp256k1_instruction::new_secp256k1_instruction, signature::Signer, transaction::Transaction,
+    commitment_config::CommitmentConfig,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction},
+    signature::Signer,
+    transaction::Transaction,
 };
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
 use spl_token::state::Mint;
-use std::mem::size_of;
 
 struct Config {
     owner: Box<dyn Signer>,
@@ -39,10 +40,9 @@ fn claim(
 ) -> Result<()> {
     let mut instructions = vec![];
 
-    let eth_address = secp256k1::PublicKey::from_secret_key(&secret_key).serialize_compressed();
-    let mut conv_ath_address = [0u8; 20];
-    conv_ath_address.copy_from_slice(&eth_address[..=20]);
-    let pair = get_address_pair(&mint, conv_ath_address)?;
+    let eth_address = secp256k1::PublicKey::from_secret_key(&secret_key);
+    let hashed_eth_pk = construct_eth_pubkey(&eth_address);
+    let pair = get_address_pair(&mint, hashed_eth_pk)?;
 
     let user_acc = recipient.map_or_else(
         || -> Result<Pubkey, ClientError> {
@@ -75,7 +75,7 @@ fn claim(
             &user_acc,
             &pair.base.address,
             Claim {
-                eth_address: conv_ath_address,
+                hashed_eth_pk,
                 amount: spl_token::ui_amount_to_amount(amount, mint_data.decimals),
             },
         )?,
@@ -92,13 +92,14 @@ fn claim(
 
 fn transfer(
     config: Config,
-    ethereum_address: EthereumPubkey,
+    ethereum_address: secp256k1::PublicKey,
     mint: Pubkey,
     amount: f64,
 ) -> Result<()> {
     let mut instructions = vec![];
 
-    let pair = get_address_pair(&mint, ethereum_address)?;
+    let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
+    let pair = get_address_pair(&mint, hashed_eth_pk)?;
     // Checking if the derived address of recipient unexist
     // then we must add instruction to create it
     if let Response { value: None, .. } = config
@@ -109,9 +110,7 @@ fn transfer(
             &claimable_tokens::id(),
             &config.fee_payer.pubkey(),
             &mint,
-            CreateTokenAccount {
-                eth_address: ethereum_address,
-            },
+            CreateTokenAccount { hashed_eth_pk },
         )?);
     }
 
@@ -278,37 +277,21 @@ fn main() -> Result<()> {
     match matches.subcommand() {
         ("claim", Some(args)) => {
             let private_key = value_t!(args.value_of("private_key"), String)?;
-            let pk_array: [u8; 32] = private_key.as_bytes().try_into().unwrap_or_else(|_| {
-                panic!(
-                    "Incorrect private key. Because len {}, but must be {}.",
-                    private_key.len(),
-                    8
-                )
-            });
-            let conv_eth_pk = secp256k1::SecretKey::parse(&pk_array)?;
+            let conv_eth_pk = secp256k1::SecretKey::parse_slice(private_key.as_bytes())?;
 
             let mint = pubkey_of(args, "mint").unwrap();
             let recipient = pubkey_of(args, "recipient");
-            let amount = value_t!(args.value_of("amount"), f64)
-                .expect("Can't parse amount, it is must present like integer");
+            let amount = value_t!(args.value_of("amount"), f64)?;
 
             claim(config, conv_eth_pk, mint, recipient, amount)?
         }
         ("transfer", Some(args)) => {
             let ethereum_address = value_t!(args.value_of("recipient"), String)?;
-            let conv_eth_add: EthereumPubkey =
-                ethereum_address.as_bytes().try_into().unwrap_or_else(|_| {
-                    panic!(
-                        "Incorrect ethereum address {}. Because len {}, but must be {}.",
-                        ethereum_address,
-                        ethereum_address.len(),
-                        size_of::<EthereumPubkey>()
-                    )
-                });
+            let conv_eth_add =
+                secp256k1::PublicKey::parse_slice(ethereum_address.as_bytes(), None)?;
 
             let mint = pubkey_of(args, "mint").unwrap();
-            let amount = value_t!(args.value_of("amount"), f64)
-                .expect("Can't parse amount, it is must present like integer");
+            let amount = value_t!(args.value_of("amount"), f64)?;
 
             transfer(config, conv_eth_add, mint, amount)?
         }
