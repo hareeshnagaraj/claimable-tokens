@@ -1,6 +1,6 @@
 #![cfg(feature = "test-bpf")]
 
-use claimable_tokens::utils::program::{get_address_pair, HashedEthereumPubkey};
+use claimable_tokens::utils::program::{get_address_pair, EthereumAddress};
 use claimable_tokens::*;
 use rand::{thread_rng, Rng};
 use secp256k1::{PublicKey, SecretKey};
@@ -140,7 +140,7 @@ pub async fn mint_tokens_to(
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
     mint: &Pubkey,
-    hashed_eth_pk: HashedEthereumPubkey,
+    hashed_eth_pk: EthereumAddress,
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
@@ -201,7 +201,7 @@ async fn prepare_claim(
     mint_account: Keypair,
     rent: solana_program::rent::Rent,
     mint_authority: Keypair,
-    eth_address: HashedEthereumPubkey,
+    eth_address: EthereumAddress,
     user_token_account: &Keypair,
 ) -> (Pubkey, Pubkey, u64) {
     create_mint(

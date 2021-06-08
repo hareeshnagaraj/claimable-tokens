@@ -3,7 +3,10 @@ use claimable_tokens::{
     instruction::{Claim, CreateTokenAccount},
     utils::program::get_address_pair,
 };
-use clap::{App, AppSettings, Arg, ArgMatches, SubCommand, crate_description, crate_name, crate_version, value_t};
+use clap::{
+    crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, ArgMatches,
+    SubCommand,
+};
 
 use solana_clap_utils::{
     fee_payer::fee_payer_arg,
@@ -309,26 +312,28 @@ fn main() -> Result<()> {
 
 #[test]
 fn test_parse_eth_pv() {
+    use secp256k1::*;
     use std::str;
 
     const INPUT_PV: &str = "09e910621c2e988e9f7f6ffcd7024f54ec1461fa6e86a4b545e9e1fe21c28866";
     const EXPECTED_PUB: &str = "048e66b3e549818ea2cb354fb70749f6c8de8fa484f7530fc447d5fe80a1c424e4f5ae648d648c980ae7095d1efad87161d83886ca4b6c498ac22a93da5099014a";
-    
-    let private = secp256k1::SecretKey::parse_slice(&hex::decode(INPUT_PV).unwrap().as_slice()).unwrap();
-    let public = secp256k1::PublicKey::from_secret_key(&private);
+
+    let private = SecretKey::parse_slice(&hex::decode(INPUT_PV).unwrap().as_slice()).unwrap();
+    let public = PublicKey::from_secret_key(&private);
     let serialized = public.serialize();
     let str_pub = hex::decode(EXPECTED_PUB).unwrap();
+
     assert_eq!(&str_pub, serialized.as_ref());
 }
 
 #[test]
 fn test_parse_eth_pk() {
-    use std::str;
     use secp256k1::*;
+    use std::str;
 
     const EXPECTED_PV: &str = "09e910621c2e988e9f7f6ffcd7024f54ec1461fa6e86a4b545e9e1fe21c28866";
     const INPUT_PUB: &str = "048e66b3e549818ea2cb354fb70749f6c8de8fa484f7530fc447d5fe80a1c424e4f5ae648d648c980ae7095d1efad87161d83886ca4b6c498ac22a93da5099014a";
-    
+
     let decoded_pk = &hex::decode(INPUT_PUB).unwrap();
     let public = PublicKey::parse_slice(decoded_pk.as_slice(), None).unwrap();
 

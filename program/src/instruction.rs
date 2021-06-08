@@ -1,6 +1,6 @@
 //! Instruction types
 
-use crate::utils::program::{get_address_pair, HashedEthereumPubkey};
+use crate::utils::program::{get_address_pair, EthereumAddress};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -13,14 +13,14 @@ use solana_program::{
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct CreateTokenAccount {
     /// Ethereum address
-    pub hashed_eth_pk: HashedEthereumPubkey,
+    pub hashed_eth_pk: EthereumAddress,
 }
 
 /// Eth address
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct Claim {
     /// Ethereum address
-    pub hashed_eth_pk: HashedEthereumPubkey,
+    pub hashed_eth_pk: EthereumAddress,
     /// The amount of claiming tokens. If set 0 claim all tokens
     /// otherwise claim specified value
     pub amount: u64,
