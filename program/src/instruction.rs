@@ -1,6 +1,6 @@
 //! Instruction types
 
-use crate::{processor::Processor, utils::program::PubkeyPatterns};
+use crate::utils::program::{get_address_pair, EthereumAddress};
 use borsh::{BorshDeserialize, BorshSerialize};
 use solana_program::{
     instruction::{AccountMeta, Instruction},
@@ -13,14 +13,17 @@ use solana_program::{
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct CreateTokenAccount {
     /// Ethereum address
-    pub eth_address: [u8; Processor::ETH_ADDRESS_SIZE],
+    pub hashed_eth_pk: EthereumAddress,
 }
 
 /// Eth address
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct Claim {
     /// Ethereum address
-    pub eth_address: [u8; Processor::ETH_ADDRESS_SIZE],
+    pub hashed_eth_pk: EthereumAddress,
+    /// The amount of claiming tokens. If set 0 claim all tokens
+    /// otherwise claim specified value
+    pub amount: u64,
 }
 
 /// Instruction definition
@@ -50,21 +53,18 @@ pub enum ClaimableProgramInstruction {
 /// Create `CreateTokenAccount` instruction
 pub fn init(
     program_id: &Pubkey,
-    funder: &Pubkey,
+    fee_payer: &Pubkey,
     mint: &Pubkey,
-    eth_address: CreateTokenAccount,
+    ethereum_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
-    let (base_acc, _, acc_to_create) = mint.get_pda(
-        &bs58::encode(eth_address.eth_address).into_string(),
-        program_id,
-        &spl_token::id(),
-    )?;
-    let data = ClaimableProgramInstruction::CreateTokenAccount(eth_address).try_to_vec()?;
+    let pair = get_address_pair(mint, ethereum_address.hashed_eth_pk)?;
+
+    let data = ClaimableProgramInstruction::CreateTokenAccount(ethereum_address).try_to_vec()?;
     let accounts = vec![
-        AccountMeta::new(*funder, true),
+        AccountMeta::new(*fee_payer, true),
         AccountMeta::new_readonly(*mint, false),
-        AccountMeta::new_readonly(base_acc, false),
-        AccountMeta::new(acc_to_create, false),
+        AccountMeta::new_readonly(pair.base.address, false),
+        AccountMeta::new(pair.derive.address, false),
         AccountMeta::new_readonly(sysvar::rent::id(), false),
         AccountMeta::new_readonly(spl_token::id(), false),
         AccountMeta::new_readonly(system_program::id(), false),
@@ -77,6 +77,10 @@ pub fn init(
 }
 
 /// Create `Claim` instruction
+///
+/// NOTE: Instruction must followed after `new_secp256k1_instruction`
+/// with params: ethereum private key and user token account public key.
+/// Otherwise error message `Secp256 instruction losing` will be issued
 pub fn claim(
     program_id: &Pubkey,
     banks_token_acc: &Pubkey,
