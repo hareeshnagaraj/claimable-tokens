@@ -33,14 +33,22 @@ struct Config {
 }
 
 fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::PublicKey> {
-    let value = value_t!(matches.value_of(name), String)?;
+    let mut value = value_t!(matches.value_of(name), String)?;
+    // handle string with front-going hex prefix
+    if value.len() == secp256k1::util::FULL_PUBLIC_KEY_SIZE + 2 || value.starts_with("0x") {
+        value.replace_range(..=1, "");
+    }
     let decoded_pk = &hex::decode(value.as_str())?;
     let pk = secp256k1::PublicKey::parse_slice(decoded_pk.as_slice(), None)?;
     Ok(pk)
 }
 
 fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::SecretKey> {
-    let value = value_t!(matches.value_of(name), String)?;
+    let mut value = value_t!(matches.value_of(name), String)?;
+    // handle string with front-going hex prefix
+    if value.len() == secp256k1::util::SECRET_KEY_SIZE + 2 || value.starts_with("0x") {
+        value.replace_range(..=1, "");
+    }
     let decoded_pk = &hex::decode(value.as_str())?;
     let sk = secp256k1::SecretKey::parse_slice(decoded_pk)?;
     Ok(sk)
