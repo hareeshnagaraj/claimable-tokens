@@ -14,17 +14,10 @@ use solana_clap_utils::{
     input_validators::{is_pubkey, is_url_or_moniker, is_valid_signer},
     keypair::signer_from_path,
 };
-use solana_client::{client_error::ClientError, rpc_client::RpcClient, rpc_response::Response};
-use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    program_pack::Pack,
-    pubkey::Pubkey,
-    secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction},
-    signature::Signer,
-    transaction::Transaction,
-};
+use solana_client::{rpc_client::RpcClient, rpc_response::Response};
+use solana_sdk::{account::ReadableAccount, commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey, secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction}, signature::Signer, transaction::Transaction};
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
-use spl_token::state::Mint;
+use spl_token::state::{Mint, Account};
 
 struct Config {
     owner: Box<dyn Signer>,
@@ -54,7 +47,7 @@ fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::Secr
     Ok(sk)
 }
 
-fn claim(
+fn transfer(
     config: Config,
     secret_key: secp256k1::SecretKey,
     mint: Pubkey,
@@ -67,21 +60,38 @@ fn claim(
     let hashed_eth_pk = construct_eth_pubkey(&eth_address);
     let pair = get_address_pair(&mint, hashed_eth_pk)?;
 
+    // If `recipient` token account provided - we will use it,
+    // otherwise will use token account associated with `config.owner`
     let user_acc = recipient.map_or_else(
-        || -> Result<Pubkey, ClientError> {
+        || -> Result<Pubkey> {
             let user_acc = get_associated_token_address(&config.owner.pubkey(), &mint);
-            // Checking if the associated token account unexist
-            // then we must add instruction to create it
-            if let Response { value: None, .. } = config
+            // Checks, if the associated token account exist otherwise,
+            // we must add instruction to create it
+            if let Response { value: Some(account), .. } = config
                 .rpc_client
                 .get_account_with_commitment(&user_acc, config.rpc_client.commitment())?
             {
+                // Unpack for checking that is token account
+                let account_data = Account::unpack(account.data())?;
+                //TODO: anyhow error handle 
+                // Check that account's mint correct  
+                if account_data.mint != mint {
+                    //TODO: anyhow error handle 
+                } 
+
+                // Checking that mint account exist 
+                let mint_acc_response= config.rpc_client.get_account_with_commitment(&mint, config.rpc_client.commitment())?;
+                // Unpack for checking that is mint account
+                Mint::unpack(mint_acc_response.value.unwrap().data())?;
+
+            } else {
                 instructions.push(create_associated_token_account(
                     &config.fee_payer.pubkey(),
                     &config.owner.pubkey(),
                     &mint,
                 ));
             }
+
             Ok(user_acc)
         },
         Ok,
@@ -113,7 +123,7 @@ fn claim(
     Ok(())
 }
 
-fn transfer(
+fn sent_to(
     config: Config,
     ethereum_address: secp256k1::PublicKey,
     mint: Pubkey,
@@ -127,7 +137,7 @@ fn transfer(
     // then we must add instruction to create it
     if let Response { value: None, .. } = config
         .rpc_client
-        .get_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())?
+        .get_token_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())?
     {
         instructions.push(claimable_tokens::instruction::init(
             &claimable_tokens::id(),
@@ -162,6 +172,19 @@ fn transfer(
         .send_and_confirm_transaction_with_spinner(&tx)?;
 
     println!("Transfer completed to recipient: {}", pair.derive.address);
+    Ok(())
+}
+
+fn balance(config: Config, ethereum_address: secp256k1::PublicKey, mint: Pubkey) -> Result<()> {
+    let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
+    let pair = get_address_pair(&mint, hashed_eth_pk)?;
+
+    if let Response { value: Some(account), .. } = config.rpc_client.get_token_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())? {
+        println!("Address balance: {}", account.token_amount.ui_amount.unwrap());
+    } else {
+        println!("Address not found");
+    }
+
     Ok(())
 }
 
@@ -213,7 +236,7 @@ fn main() -> Result<()> {
         )
         .arg(fee_payer_arg().global(true))
         .subcommands(vec![
-            SubCommand::with_name("transfer")
+            SubCommand::with_name("sent-to") 
                 .args(&[
                     Arg::with_name("recipient")
                         .value_name("ETHEREUM_ADDRESS")
@@ -232,7 +255,7 @@ fn main() -> Result<()> {
                         .help("Amount to send"),
                 ])
                 .help("Transfer Solana token claimable by Ethereum users"),
-            SubCommand::with_name("claim").args(&[
+            SubCommand::with_name("transfer").args(&[
                 Arg::with_name("mint")
                     .validator(is_pubkey)
                     .value_name("MINT_ADDRESS")
@@ -250,13 +273,28 @@ fn main() -> Result<()> {
                     .validator(is_pubkey)
                     .value_name("SOLANA_ADDRESS")
                     .takes_value(true)
+                    .required(true)
                     .help("Recipient of transfer"),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
                     .takes_value(true)
                     .required(true)
-                    .help("Amount to claim"),
-            ]),
+                    .help("Amount to claim")
+                ])
+                .help("TODO"),
+            SubCommand::with_name("balance").args(&[
+                Arg::with_name("address")
+                    .value_name("ETHEREUM_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("Ethereum address"),
+                Arg::with_name("mint")
+                    .value_name("MINT_ADDRESS")
+                    .takes_value(true)
+                    .required(true)
+                    .help("TODO"),
+            ])
+                .help("TODO"),
         ])
         .get_matches();
 
@@ -298,20 +336,26 @@ fn main() -> Result<()> {
     solana_logger::setup_with_default("solana=info");
 
     match matches.subcommand() {
-        ("claim", Some(args)) => {
+        ("transfer", Some(args)) => {
             let privkey = eth_seckey_of(args, "private_key")?;
             let mint = pubkey_of(args, "mint").unwrap();
             let recipient = pubkey_of(args, "recipient");
             let amount = value_t!(args.value_of("amount"), f64)?;
 
-            claim(config, privkey, mint, recipient, amount)?
+            transfer(config, privkey, mint, recipient, amount)?
         }
-        ("transfer", Some(args)) => {
+        ("sent_to", Some(args)) => {
             let pubkey = eth_pubkey_of(args, "recipient")?;
             let mint = pubkey_of(args, "mint").unwrap();
             let amount = value_t!(args.value_of("amount"), f64)?;
 
-            transfer(config, pubkey, mint, amount)?
+            sent_to(config, pubkey, mint, amount)?
+        },
+        ("balance", Some(args)) => {
+            let pubkey = eth_pubkey_of(args, "address")?;
+            let mint = pubkey_of(args, "recipient").unwrap();
+
+            balance(config, pubkey, mint)?
         }
         _ => unreachable!(),
     }
