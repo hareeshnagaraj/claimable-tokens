@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Context};
 use claimable_tokens::{
     instruction::{Claim, CreateTokenAccount},
     utils::program::get_address_pair,
@@ -7,7 +7,6 @@ use clap::{
     crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, ArgMatches,
     SubCommand,
 };
-
 use solana_clap_utils::{
     fee_payer::fee_payer_arg,
     input_parsers::pubkey_of,
@@ -15,9 +14,17 @@ use solana_clap_utils::{
     keypair::signer_from_path,
 };
 use solana_client::{rpc_client::RpcClient, rpc_response::Response};
-use solana_sdk::{account::ReadableAccount, commitment_config::CommitmentConfig, program_pack::Pack, pubkey::Pubkey, secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction}, signature::Signer, transaction::Transaction};
+use solana_sdk::{
+    account::ReadableAccount,
+    commitment_config::CommitmentConfig,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    secp256k1_instruction::{construct_eth_pubkey, new_secp256k1_instruction},
+    signature::Signer,
+    transaction::Transaction,
+};
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
-use spl_token::state::{Mint, Account};
+use spl_token::state::{Account, Mint};
 
 struct Config {
     owner: Box<dyn Signer>,
@@ -25,23 +32,23 @@ struct Config {
     rpc_client: RpcClient,
 }
 
-fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::PublicKey> {
-    let mut value = value_t!(matches.value_of(name), String)?;
-    // handle string with front-going hex prefix
-    if value.len() == secp256k1::util::FULL_PUBLIC_KEY_SIZE + 2 && value.starts_with("0x") {
-        value.replace_range(..=1, "");
+fn handle_hex_prefix(str: &mut String) {
+    if str.starts_with("0x") {
+        str.replace_range(..=1, "");
     }
+}
+
+fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256k1::PublicKey> {
+    let mut value = value_t!(matches.value_of(name), String)?;
+    handle_hex_prefix(&mut value);
     let decoded_pk = &hex::decode(value.as_str())?;
     let pk = secp256k1::PublicKey::parse_slice(decoded_pk.as_slice(), None)?;
     Ok(pk)
 }
 
-fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> Result<secp256k1::SecretKey> {
+fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256k1::SecretKey> {
     let mut value = value_t!(matches.value_of(name), String)?;
-    // handle string with front-going hex prefix
-    if value.len() == secp256k1::util::SECRET_KEY_SIZE + 2 && value.starts_with("0x") {
-        value.replace_range(..=1, "");
-    }
+    handle_hex_prefix(&mut value);
     let decoded_pk = &hex::decode(value.as_str())?;
     let sk = secp256k1::SecretKey::parse_slice(decoded_pk)?;
     Ok(sk)
@@ -53,7 +60,7 @@ fn transfer(
     mint: Pubkey,
     recipient: Option<Pubkey>,
     amount: f64,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let mut instructions = vec![];
 
     let eth_address = secp256k1::PublicKey::from_secret_key(&secret_key);
@@ -63,27 +70,31 @@ fn transfer(
     // If `recipient` token account provided - we will use it,
     // otherwise will use token account associated with `config.owner`
     let user_acc = recipient.map_or_else(
-        || -> Result<Pubkey> {
+        || -> anyhow::Result<Pubkey> {
             let user_acc = get_associated_token_address(&config.owner.pubkey(), &mint);
             // Checks, if the associated token account exist otherwise,
             // we must add instruction to create it
-            if let Response { value: Some(account), .. } = config
+            if let Response {
+                value: Some(account),
+                ..
+            } = config
                 .rpc_client
                 .get_account_with_commitment(&user_acc, config.rpc_client.commitment())?
             {
                 // Unpack for checking that is token account
                 let account_data = Account::unpack(account.data())?;
-                //TODO: anyhow error handle 
-                // Check that account's mint correct  
-                if account_data.mint != mint {
-                    //TODO: anyhow error handle 
-                } 
 
-                // Checking that mint account exist 
-                let mint_acc_response= config.rpc_client.get_account_with_commitment(&mint, config.rpc_client.commitment())?;
+                // Check that account's mint correct
+                if account_data.mint != mint {
+                    bail!("Associated token account has incorrect mint");
+                }
+
+                // Checking that mint account exist
+                let mint_acc_response = config
+                    .rpc_client
+                    .get_account_with_commitment(&mint, config.rpc_client.commitment())?;
                 // Unpack for checking that is mint account
                 Mint::unpack(mint_acc_response.value.unwrap().data())?;
-
             } else {
                 instructions.push(create_associated_token_account(
                     &config.fee_payer.pubkey(),
@@ -128,7 +139,7 @@ fn sent_to(
     ethereum_address: secp256k1::PublicKey,
     mint: Pubkey,
     amount: f64,
-) -> Result<()> {
+) -> anyhow::Result<()> {
     let mut instructions = vec![];
 
     let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
@@ -175,12 +186,25 @@ fn sent_to(
     Ok(())
 }
 
-fn balance(config: Config, ethereum_address: secp256k1::PublicKey, mint: Pubkey) -> Result<()> {
+fn balance(
+    config: Config,
+    ethereum_address: secp256k1::PublicKey,
+    mint: Pubkey,
+) -> anyhow::Result<()> {
     let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
     let pair = get_address_pair(&mint, hashed_eth_pk)?;
 
-    if let Response { value: Some(account), .. } = config.rpc_client.get_token_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())? {
-        println!("Address balance: {}", account.token_amount.ui_amount.unwrap());
+    if let Response {
+        value: Some(account),
+        ..
+    } = config
+        .rpc_client
+        .get_token_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())?
+    {
+        println!(
+            "Address balance: {}",
+            account.token_amount.ui_amount.unwrap()
+        );
     } else {
         println!("Address not found");
     }
@@ -188,7 +212,7 @@ fn balance(config: Config, ethereum_address: secp256k1::PublicKey, mint: Pubkey)
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn main() -> anyhow::Result<()> {
     let matches = App::new(crate_name!())
         .about(crate_description!())
         .version(crate_version!())
@@ -236,7 +260,7 @@ fn main() -> Result<()> {
         )
         .arg(fee_payer_arg().global(true))
         .subcommands(vec![
-            SubCommand::with_name("sent-to") 
+            SubCommand::with_name("sent_to") 
                 .args(&[
                     Arg::with_name("recipient")
                         .value_name("ETHEREUM_ADDRESS")
@@ -254,7 +278,7 @@ fn main() -> Result<()> {
                         .required(true)
                         .help("Amount to send"),
                 ])
-                .help("Transfer Solana token claimable by Ethereum users"),
+                .help("Sents some amount of tokens of specified mint to the Solana account associated with Etherium address."),
             SubCommand::with_name("transfer").args(&[
                 Arg::with_name("mint")
                     .validator(is_pubkey)
@@ -274,14 +298,14 @@ fn main() -> Result<()> {
                     .value_name("SOLANA_ADDRESS")
                     .takes_value(true)
                     .required(true)
-                    .help("Recipient of transfer"),
+                    .help("Recipient of transfer."),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
                     .takes_value(true)
                     .required(true)
                     .help("Amount to claim")
                 ])
-                .help("TODO"),
+                .help("Transfers some amount of tokens from your account associated with Etherium address to another account."),
             SubCommand::with_name("balance").args(&[
                 Arg::with_name("address")
                     .value_name("ETHEREUM_ADDRESS")
@@ -294,7 +318,7 @@ fn main() -> Result<()> {
                     .required(true)
                     .help("TODO"),
             ])
-                .help("TODO"),
+                .help("Receives balance of account that associated with Ethereum address and specific mint."),
         ])
         .get_matches();
 
@@ -337,25 +361,41 @@ fn main() -> Result<()> {
 
     match matches.subcommand() {
         ("transfer", Some(args)) => {
-            let privkey = eth_seckey_of(args, "private_key")?;
-            let mint = pubkey_of(args, "mint").unwrap();
-            let recipient = pubkey_of(args, "recipient");
-            let amount = value_t!(args.value_of("amount"), f64)?;
+            let (privkey, mint, recipient, amount) = (|| -> anyhow::Result<_> {
+                let privkey = eth_seckey_of(args, "private_key")?;
+                let mint = pubkey_of(args, "mint").unwrap();
+                let recipient = pubkey_of(args, "recipient");
+                let amount = value_t!(args.value_of("amount"), f64)?;
 
-            transfer(config, privkey, mint, recipient, amount)?
+                Ok((privkey, mint, recipient, amount))
+            })()
+            .context("Preparing parameters for execution command `transfer`")?;
+
+            transfer(config, privkey, mint, recipient, amount)
+                .context("Failed to execute `transfer` command")?
         }
         ("sent_to", Some(args)) => {
-            let pubkey = eth_pubkey_of(args, "recipient")?;
-            let mint = pubkey_of(args, "mint").unwrap();
-            let amount = value_t!(args.value_of("amount"), f64)?;
+            let (pubkey, mint, amount) = (|| -> anyhow::Result<_> {
+                let pubkey = eth_pubkey_of(args, "recipient")?;
+                let mint = pubkey_of(args, "mint").unwrap();
+                let amount = value_t!(args.value_of("amount"), f64)?;
 
-            sent_to(config, pubkey, mint, amount)?
-        },
+                Ok((pubkey, mint, amount))
+            })()
+            .context("Preparing parameters for execution command `sent to`")?;
+
+            sent_to(config, pubkey, mint, amount).context("Failed to execute `send to` coomand")?
+        }
         ("balance", Some(args)) => {
-            let pubkey = eth_pubkey_of(args, "address")?;
-            let mint = pubkey_of(args, "recipient").unwrap();
+            let (pubkey, mint) = (|| -> anyhow::Result<_> {
+                let pubkey = eth_pubkey_of(args, "address")?;
+                let mint = pubkey_of(args, "recipient").unwrap();
 
-            balance(config, pubkey, mint)?
+                Ok((pubkey, mint))
+            })()
+            .context("Preparing parameters for execution command `balance`")?;
+
+            balance(config, pubkey, mint).context("Failed to execute `balance` command")?
         }
         _ => unreachable!(),
     }
