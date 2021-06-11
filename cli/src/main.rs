@@ -32,9 +32,9 @@ struct Config {
     rpc_client: RpcClient,
 }
 
-fn handle_hex_prefix(str: &mut String) {
-    if str.starts_with("0x") {
-        str.replace_range(..=1, "");
+fn handle_hex_prefix(hex_str: &mut String) {
+    if hex_str.starts_with("0x") {
+        hex_str.replace_range(..=1, "");
     }
 }
 
@@ -260,7 +260,7 @@ fn main() -> anyhow::Result<()> {
         )
         .arg(fee_payer_arg().global(true))
         .subcommands(vec![
-            SubCommand::with_name("sent_to") 
+            SubCommand::with_name("sent-to") 
                 .args(&[
                     Arg::with_name("recipient")
                         .value_name("ETHEREUM_ADDRESS")
@@ -278,7 +278,7 @@ fn main() -> anyhow::Result<()> {
                         .required(true)
                         .help("Amount to send"),
                 ])
-                .help("Sents some amount of tokens of specified mint to the Solana account associated with Etherium address."),
+                .help("Sends some amount of tokens of specified mint to the Solana account associated with Ethereum address."),
             SubCommand::with_name("transfer").args(&[
                 Arg::with_name("mint")
                     .validator(is_pubkey)
@@ -297,7 +297,6 @@ fn main() -> anyhow::Result<()> {
                     .validator(is_pubkey)
                     .value_name("SOLANA_ADDRESS")
                     .takes_value(true)
-                    .required(true)
                     .help("Recipient of transfer."),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
@@ -316,7 +315,7 @@ fn main() -> anyhow::Result<()> {
                     .value_name("MINT_ADDRESS")
                     .takes_value(true)
                     .required(true)
-                    .help("TODO"),
+                    .help("Mint of tokens that hold at associated account."),
             ])
                 .help("Receives balance of account that associated with Ethereum address and specific mint."),
         ])
@@ -374,7 +373,7 @@ fn main() -> anyhow::Result<()> {
             transfer(config, privkey, mint, recipient, amount)
                 .context("Failed to execute `transfer` command")?
         }
-        ("sent_to", Some(args)) => {
+        ("sent-to", Some(args)) => {
             let (pubkey, mint, amount) = (|| -> anyhow::Result<_> {
                 let pubkey = eth_pubkey_of(args, "recipient")?;
                 let mint = pubkey_of(args, "mint").unwrap();
