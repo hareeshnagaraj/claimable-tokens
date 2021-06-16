@@ -41,6 +41,7 @@ fn handle_hex_prefix(hex_str: &mut String) {
 fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256k1::PublicKey> {
     let mut value = value_t!(matches.value_of(name), String)?;
     handle_hex_prefix(&mut value);
+    println!("{}", value);
     let decoded_pk = &hex::decode(value.as_str())?;
     let pk = secp256k1::PublicKey::parse_slice(decoded_pk.as_slice(), None)?;
     Ok(pk)
@@ -134,7 +135,7 @@ fn transfer(
     Ok(())
 }
 
-fn sent_to(
+fn send_to(
     config: Config,
     ethereum_address: secp256k1::PublicKey,
     mint: Pubkey,
@@ -260,7 +261,7 @@ fn main() -> anyhow::Result<()> {
         )
         .arg(fee_payer_arg().global(true))
         .subcommands(vec![
-            SubCommand::with_name("sent-to") 
+            SubCommand::with_name("send-to") 
                 .args(&[
                     Arg::with_name("recipient")
                         .value_name("ETHEREUM_ADDRESS")
@@ -373,7 +374,7 @@ fn main() -> anyhow::Result<()> {
             transfer(config, privkey, mint, recipient, amount)
                 .context("Failed to execute `transfer` command")?
         }
-        ("sent-to", Some(args)) => {
+        ("send-to", Some(args)) => {
             let (pubkey, mint, amount) = (|| -> anyhow::Result<_> {
                 let pubkey = eth_pubkey_of(args, "recipient")?;
                 let mint = pubkey_of(args, "mint").unwrap();
@@ -381,9 +382,9 @@ fn main() -> anyhow::Result<()> {
 
                 Ok((pubkey, mint, amount))
             })()
-            .context("Preparing parameters for execution command `sent to`")?;
+            .context("Preparing parameters for execution command `send to`")?;
 
-            sent_to(config, pubkey, mint, amount).context("Failed to execute `send to` coomand")?
+            send_to(config, pubkey, mint, amount).context("Failed to execute `send to` coomand")?
         }
         ("balance", Some(args)) => {
             let (pubkey, mint) = (|| -> anyhow::Result<_> {
