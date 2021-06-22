@@ -68,21 +68,7 @@ fn calculate_and_create_associated_key(
         spl_associated_token_account::get_associated_token_address(&config.owner.pubkey(), &mint);
 
     if !token_account_initialized(config, &calculated_key) {
-        let mut tx = Transaction::new_with_payer(&[
-            spl_associated_token_account::create_associated_token_account(
-                &config.fee_payer.pubkey(),
-                &config.owner.pubkey(),
-                &mint,
-            ),
-        ], Some(&config.fee_payer.pubkey()));
-        let (recent_blockhash, _) = config.rpc_client.get_recent_blockhash()?;
-        tx.sign(&[config.fee_payer.as_ref()], recent_blockhash);
-        let tx_hash = config
-            .rpc_client
-            .send_and_confirm_transaction_with_spinner(&tx)?;
-        println!("New associated token account was created: {:?}", tx_hash);
-        println!("Don't forget to fund this account!");
-        bail!("Command processing was interrupted because created above token account should be funded first.")
+        bail!("Command processing was interrupted because owner token account isn't initialized.")
     }
     Ok(calculated_key)
 }
