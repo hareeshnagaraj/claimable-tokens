@@ -27,7 +27,7 @@ pub struct Processor;
 impl Processor {
     #[allow(clippy::too_many_arguments)]
     fn create_account<'a>(
-        _program_id: &Pubkey,
+        program_id: &Pubkey,
         funder: AccountInfo<'a>,
         account_to_create: AccountInfo<'a>,
         mint_key: &Pubkey,
@@ -36,7 +36,7 @@ impl Processor {
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
-        let pair = get_address_pair(mint_key, eth_address)?;
+        let pair = get_address_pair(program_id, mint_key, eth_address)?;
         if *base.key != pair.base.address {
             return Err(ProgramError::InvalidSeeds);
         }
@@ -82,13 +82,13 @@ impl Processor {
         source: AccountInfo<'a>,
         destination: AccountInfo<'a>,
         authority: AccountInfo<'a>,
-        _program_id: &Pubkey,
+        program_id: &Pubkey,
         eth_address: EthereumAddress,
         amount: u64,
     ) -> Result<(), ProgramError> {
         let source_data = spl_token::state::Account::unpack(&source.data.borrow())?;
 
-        let pair = get_address_pair(&source_data.mint, eth_address)?;
+        let pair = get_address_pair(program_id, &source_data.mint, eth_address)?;
         if *source.key != pair.derive.address {
             return Err(ProgramError::InvalidSeeds);
         }

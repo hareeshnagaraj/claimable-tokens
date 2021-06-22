@@ -28,6 +28,7 @@ use solana_sdk::{
 };
 use spl_associated_token_account::{create_associated_token_account, get_associated_token_address};
 use spl_token::state::{Account, Mint};
+use solana_program::instruction::Instruction;
 
 struct Config {
     owner: Box<dyn Signer>,
@@ -58,6 +59,46 @@ fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256
     Ok(sk)
 }
 
+fn calculate_and_create_associated_key(
+    config: &Config,
+    mint: &Pubkey,
+) -> anyhow::Result<Pubkey> {
+
+    let calculated_key =
+        spl_associated_token_account::get_associated_token_address(&config.owner.pubkey(), &mint);
+
+    if !token_account_initialized(config, &calculated_key) {
+        let mut tx = Transaction::new_with_payer(&[
+            spl_associated_token_account::create_associated_token_account(
+                &config.fee_payer.pubkey(),
+                &config.owner.pubkey(),
+                &mint,
+            ),
+        ], Some(&config.fee_payer.pubkey()));
+        let (recent_blockhash, _) = config.rpc_client.get_recent_blockhash()?;
+        tx.sign(&[config.fee_payer.as_ref()], recent_blockhash);
+        let tx_hash = config
+            .rpc_client
+            .send_and_confirm_transaction_with_spinner(&tx)?;
+        println!("New associated token account was created: {:?}", tx_hash);
+        println!("Don't forget to fund this account!");
+        bail!("Command processing was interrupted because created above token account should be funded first.")
+    }
+    Ok(calculated_key)
+}
+
+fn token_account_initialized(config: &Config, key: &Pubkey) -> bool {
+    let token_acc_data = config.rpc_client.get_account_data(&key).ok();
+    if let Some(acc_data) = token_acc_data {
+        let token_acc = Account::unpack(acc_data.as_slice());
+
+        if token_acc.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 fn transfer(
     config: Config,
     secret_key: secp256k1::SecretKey,
@@ -69,7 +110,7 @@ fn transfer(
 
     let eth_pubkey = secp256k1::PublicKey::from_secret_key(&secret_key);
     let eth_address = construct_eth_pubkey(&eth_pubkey);
-    let pair = get_address_pair(&mint, eth_address)?;
+    let pair = get_address_pair(&claimable_tokens::id(), &mint, eth_address)?;
 
     // If `recipient` token account provided - we will use it,
     // otherwise will use token account associated with `config.owner`
@@ -116,7 +157,7 @@ fn transfer(
     let mint_data = Mint::unpack(mint_raw_data.as_ref())?;
 
     let instructions = &[
-        new_secp256k1_instruction(&secret_key, &pair.derive.address.to_bytes()),
+        new_secp256k1_instruction(&secret_key, &user_acc.to_bytes()),
         claimable_tokens::instruction::claim(
             &claimable_tokens::id(),
             &pair.derive.address,
@@ -131,23 +172,21 @@ fn transfer(
     let mut tx = Transaction::new_with_payer(instructions, Some(&config.fee_payer.pubkey()));
     let (recent_blockhash, _) = config.rpc_client.get_recent_blockhash()?;
     tx.sign(&[config.fee_payer.as_ref()], recent_blockhash);
-    config
+    let tx_hash = config
         .rpc_client
         .send_and_confirm_transaction_with_spinner(&tx)?;
-    println!("Claim completed");
+    println!("Claim completed, transaction hash: {:?}", tx_hash);
     Ok(())
 }
 
 fn send_to(config: Config, eth_address: [u8; 20], mint: Pubkey, amount: f64) -> anyhow::Result<()> {
-    let mut instructions = vec![];
+    let mut instructions: Vec<Instruction> = vec![];
 
-    let pair = get_address_pair(&mint, eth_address)?;
-    // Checking if the derived address of recipient unexist
+    let pair = get_address_pair(&claimable_tokens::id(), &mint, eth_address)?;
+    // Checking if the derived address of recipient does not exist
     // then we must add instruction to create it
-    if let Response { value: None, .. } = config
-        .rpc_client
-        .get_token_account_with_commitment(&pair.derive.address, config.rpc_client.commitment())?
-    {
+    let derived_token_acc_data = config.rpc_client.get_account_data(&pair.derive.address);
+    if derived_token_acc_data.is_err() {
         instructions.push(claimable_tokens::instruction::init(
             &claimable_tokens::id(),
             &config.fee_payer.pubkey(),
@@ -159,13 +198,14 @@ fn send_to(config: Config, eth_address: [u8; 20], mint: Pubkey, amount: f64) -> 
     let mint_raw_data = config.rpc_client.get_account_data(&mint)?;
     let mint_data = Mint::unpack(mint_raw_data.as_ref())?;
 
-    let account = get_associated_token_address(&config.owner.pubkey(), &mint);
+    let account = calculate_and_create_associated_key(&config, &mint)?;
+
     instructions.push(spl_token::instruction::transfer(
         &spl_token::id(),
         &account,
         &pair.derive.address,
         &config.owner.pubkey(),
-        &[],
+        &[&config.owner.pubkey()],
         spl_token::ui_amount_to_amount(amount, mint_data.decimals),
     )?);
 
@@ -176,16 +216,16 @@ fn send_to(config: Config, eth_address: [u8; 20], mint: Pubkey, amount: f64) -> 
         &[config.fee_payer.as_ref(), config.owner.as_ref()],
         recent_blockhash,
     );
-    config
+    let tx_hash = config
         .rpc_client
         .send_and_confirm_transaction_with_spinner(&tx)?;
 
-    println!("Transfer completed to recipient: {}", pair.derive.address);
+    println!("Transfer completed to recipient: {}\nTransaction hash: {:?}", pair.derive.address, tx_hash);
     Ok(())
 }
 
 fn balance(config: Config, eth_address: EthereumAddress, mint: Pubkey) -> anyhow::Result<()> {
-    let pair = get_address_pair(&mint, eth_address)?;
+    let pair = get_address_pair(&claimable_tokens::id(), &mint, eth_address)?;
 
     if let Response {
         value: Some(account),
@@ -280,23 +320,23 @@ fn main() -> anyhow::Result<()> {
                     .required(true)
                     .help("Mint for token to claim"),
                 Arg::with_name("private_key")
-                    .long("private-key")
                     .value_name("ETHEREUM_PRIVATE_KEY")
                     .takes_value(true)
                     .required(true)
                     .help("Ethereum private key to sign the transaction"),
-                Arg::with_name("recipient")
-                    .validator(is_pubkey)
-                    .value_name("SOLANA_ADDRESS")
-                    .takes_value(true)
-                    .help("Recipient of transfer."),
                 Arg::with_name("amount")
                     .value_name("NUMBER")
                     .takes_value(true)
                     .required(true)
-                    .help("Amount to claim")
+                    .help("Amount to claim"),
+                Arg::with_name("recipient")
+                    .long("recipient")
+                    .validator(is_pubkey)
+                    .value_name("SOLANA_ADDRESS")
+                    .takes_value(true)
+                    .help("Recipient of transfer."),
                 ])
-                .help("Transfers some amount of tokens from your account associated with Etherium address to another account."),
+                .help("Transfers some amount of tokens from your account associated with Ethereum address to another account."),
             SubCommand::with_name("balance").args(&[
                 Arg::with_name("address")
                     .value_name("ETHEREUM_ADDRESS")
@@ -318,7 +358,7 @@ fn main() -> anyhow::Result<()> {
     let cli_config = if let Some(config_file) = matches.value_of("config_file") {
         solana_cli_config::Config::load(config_file)?
     } else {
-        println!("Config file not provided and default config unexist. Create config");
+        println!("Config file not provided and default config does not exist. Create config");
         solana_cli_config::Config::default()
     };
     let json_rpc_url = value_t!(matches, "json_rpc_url", String)

@@ -182,7 +182,7 @@ async fn test_init_instruction() {
     .await
     .unwrap();
 
-    let pair = get_address_pair(&mint_account.pubkey(), hashed_eth_pk).unwrap();
+    let pair = get_address_pair(&id(), &mint_account.pubkey(), hashed_eth_pk).unwrap();
 
     init_user_bank(&mut program_context, &mint_account.pubkey(), hashed_eth_pk)
         .await
@@ -213,7 +213,7 @@ async fn prepare_claim(
     .await
     .unwrap();
 
-    let pair = get_address_pair(&mint_account.pubkey(), eth_address).unwrap();
+    let pair = get_address_pair(&id(), &mint_account.pubkey(), eth_address).unwrap();
 
     init_user_bank(program_context, &mint_account.pubkey(), eth_address)
         .await

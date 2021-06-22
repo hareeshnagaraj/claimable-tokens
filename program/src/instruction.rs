@@ -57,7 +57,7 @@ pub fn init(
     mint: &Pubkey,
     ethereum_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
-    let pair = get_address_pair(mint, ethereum_address.eth_address)?;
+    let pair = get_address_pair(program_id, mint, ethereum_address.eth_address)?;
 
     let data = ClaimableProgramInstruction::CreateTokenAccount(ethereum_address).try_to_vec()?;
     let accounts = vec![
