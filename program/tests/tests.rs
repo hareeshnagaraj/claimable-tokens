@@ -140,14 +140,14 @@ pub async fn mint_tokens_to(
 async fn init_user_bank(
     program_context: &mut ProgramTestContext,
     mint: &Pubkey,
-    hashed_eth_pk: EthereumAddress,
+    eth_address: EthereumAddress,
 ) -> Result<(), TransportError> {
     let mut transaction = Transaction::new_with_payer(
         &[instruction::init(
             &id(),
             &program_context.payer.pubkey(),
             mint,
-            instruction::CreateTokenAccount { hashed_eth_pk },
+            instruction::CreateTokenAccount { eth_address },
         )
         .unwrap()],
         Some(&program_context.payer.pubkey()),
@@ -250,7 +250,7 @@ async fn test_claim_all_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
+    let eth_address = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = user_token_account.pubkey().to_bytes();
@@ -264,7 +264,7 @@ async fn test_claim_all_instruction() {
         mint_account,
         rent,
         mint_authority,
-        hashed_eth_pk,
+        eth_address,
         &user_token_account,
     )
     .await;
@@ -278,7 +278,7 @@ async fn test_claim_all_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    hashed_eth_pk,
+                    eth_address,
                     amount: 0,
                 },
             )
@@ -317,7 +317,7 @@ async fn test_claim_with_amount_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
+    let eth_address = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = user_token_account.pubkey().to_bytes();
@@ -331,7 +331,7 @@ async fn test_claim_with_amount_instruction() {
         mint_account,
         rent,
         mint_authority,
-        hashed_eth_pk,
+        eth_address,
         &user_token_account,
     )
     .await;
@@ -346,7 +346,7 @@ async fn test_claim_with_amount_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    hashed_eth_pk,
+                    eth_address,
                     amount: transfer_amount,
                 },
             )
@@ -385,7 +385,7 @@ async fn test_claim_with_wrong_signature_instruction() {
     let key: [u8; 32] = rng.gen();
     let priv_key = SecretKey::parse(&key).unwrap();
     let secp_pubkey = PublicKey::from_secret_key(&priv_key);
-    let hashed_eth_pk = construct_eth_pubkey(&secp_pubkey);
+    let eth_address = construct_eth_pubkey(&secp_pubkey);
 
     let user_token_account = Keypair::new();
     let message = [8u8; 30];
@@ -400,7 +400,7 @@ async fn test_claim_with_wrong_signature_instruction() {
         mint_account,
         rent,
         mint_authority,
-        hashed_eth_pk,
+        eth_address,
         &user_token_account,
     )
     .await;
@@ -414,7 +414,7 @@ async fn test_claim_with_wrong_signature_instruction() {
                 &user_token_account.pubkey(),
                 &base_acc,
                 instruction::Claim {
-                    hashed_eth_pk,
+                    eth_address,
                     amount: 0,
                 },
             )

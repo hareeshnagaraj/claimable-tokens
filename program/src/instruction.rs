@@ -13,14 +13,14 @@ use solana_program::{
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct CreateTokenAccount {
     /// Ethereum address
-    pub hashed_eth_pk: EthereumAddress,
+    pub eth_address: EthereumAddress,
 }
 
 /// Eth address
 #[derive(Clone, BorshDeserialize, BorshSerialize, PartialEq, Debug)]
 pub struct Claim {
     /// Ethereum address
-    pub hashed_eth_pk: EthereumAddress,
+    pub eth_address: EthereumAddress,
     /// The amount of claiming tokens. If set 0 claim all tokens
     /// otherwise claim specified value
     pub amount: u64,
@@ -57,7 +57,7 @@ pub fn init(
     mint: &Pubkey,
     ethereum_address: CreateTokenAccount,
 ) -> Result<Instruction, ProgramError> {
-    let pair = get_address_pair(mint, ethereum_address.hashed_eth_pk)?;
+    let pair = get_address_pair(mint, ethereum_address.eth_address)?;
 
     let data = ClaimableProgramInstruction::CreateTokenAccount(ethereum_address).try_to_vec()?;
     let accounts = vec![

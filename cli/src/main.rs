@@ -1,7 +1,10 @@
+use std::convert::TryInto;
+
+use anyhow::anyhow;
 use anyhow::{bail, Context};
 use claimable_tokens::{
     instruction::{Claim, CreateTokenAccount},
-    utils::program::get_address_pair,
+    utils::program::{get_address_pair, EthereumAddress},
 };
 use clap::{
     crate_description, crate_name, crate_version, value_t, App, AppSettings, Arg, ArgMatches,
@@ -38,13 +41,13 @@ fn handle_hex_prefix(hex_str: &mut String) {
     }
 }
 
-fn eth_pubkey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256k1::PublicKey> {
+fn eth_address_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<EthereumAddress> {
     let mut value = value_t!(matches.value_of(name), String)?;
     handle_hex_prefix(&mut value);
-    println!("{}", value);
-    let decoded_pk = &hex::decode(value.as_str())?;
-    let pk = secp256k1::PublicKey::parse_slice(decoded_pk.as_slice(), None)?;
-    Ok(pk)
+    let decoded_pk = hex::decode(value.as_str())?;
+    decoded_pk
+        .try_into()
+        .map_err(|op: Vec<u8>| anyhow!("Address len must be 20, but current is {}", op.len()))
 }
 
 fn eth_seckey_of(matches: &ArgMatches<'_>, name: &str) -> anyhow::Result<secp256k1::SecretKey> {
@@ -64,9 +67,9 @@ fn transfer(
 ) -> anyhow::Result<()> {
     let mut instructions = vec![];
 
-    let eth_address = secp256k1::PublicKey::from_secret_key(&secret_key);
-    let hashed_eth_pk = construct_eth_pubkey(&eth_address);
-    let pair = get_address_pair(&mint, hashed_eth_pk)?;
+    let eth_pubkey = secp256k1::PublicKey::from_secret_key(&secret_key);
+    let eth_address = construct_eth_pubkey(&eth_pubkey);
+    let pair = get_address_pair(&mint, eth_address)?;
 
     // If `recipient` token account provided - we will use it,
     // otherwise will use token account associated with `config.owner`
@@ -120,7 +123,7 @@ fn transfer(
             &user_acc,
             &pair.base.address,
             Claim {
-                hashed_eth_pk,
+                eth_address,
                 amount: spl_token::ui_amount_to_amount(amount, mint_data.decimals),
             },
         )?,
@@ -135,16 +138,10 @@ fn transfer(
     Ok(())
 }
 
-fn send_to(
-    config: Config,
-    ethereum_address: secp256k1::PublicKey,
-    mint: Pubkey,
-    amount: f64,
-) -> anyhow::Result<()> {
+fn send_to(config: Config, eth_address: [u8; 20], mint: Pubkey, amount: f64) -> anyhow::Result<()> {
     let mut instructions = vec![];
 
-    let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
-    let pair = get_address_pair(&mint, hashed_eth_pk)?;
+    let pair = get_address_pair(&mint, eth_address)?;
     // Checking if the derived address of recipient unexist
     // then we must add instruction to create it
     if let Response { value: None, .. } = config
@@ -155,7 +152,7 @@ fn send_to(
             &claimable_tokens::id(),
             &config.fee_payer.pubkey(),
             &mint,
-            CreateTokenAccount { hashed_eth_pk },
+            CreateTokenAccount { eth_address },
         )?);
     }
 
@@ -187,13 +184,8 @@ fn send_to(
     Ok(())
 }
 
-fn balance(
-    config: Config,
-    ethereum_address: secp256k1::PublicKey,
-    mint: Pubkey,
-) -> anyhow::Result<()> {
-    let hashed_eth_pk = construct_eth_pubkey(&ethereum_address);
-    let pair = get_address_pair(&mint, hashed_eth_pk)?;
+fn balance(config: Config, eth_address: EthereumAddress, mint: Pubkey) -> anyhow::Result<()> {
+    let pair = get_address_pair(&mint, eth_address)?;
 
     if let Response {
         value: Some(account),
@@ -289,7 +281,6 @@ fn main() -> anyhow::Result<()> {
                     .help("Mint for token to claim"),
                 Arg::with_name("private_key")
                     .long("private-key")
-                    .validator(is_pubkey)
                     .value_name("ETHEREUM_PRIVATE_KEY")
                     .takes_value(true)
                     .required(true)
@@ -375,31 +366,46 @@ fn main() -> anyhow::Result<()> {
                 .context("Failed to execute `transfer` command")?
         }
         ("send-to", Some(args)) => {
-            let (pubkey, mint, amount) = (|| -> anyhow::Result<_> {
-                let pubkey = eth_pubkey_of(args, "recipient")?;
+            let (eth_address, mint, amount) = (|| -> anyhow::Result<_> {
+                let eth_address = eth_address_of(args, "recipient")?;
                 let mint = pubkey_of(args, "mint").unwrap();
                 let amount = value_t!(args.value_of("amount"), f64)?;
 
-                Ok((pubkey, mint, amount))
+                Ok((eth_address, mint, amount))
             })()
             .context("Preparing parameters for execution command `send to`")?;
 
-            send_to(config, pubkey, mint, amount).context("Failed to execute `send to` coomand")?
+            send_to(config, eth_address, mint, amount)
+                .context("Failed to execute `send to` command")?
         }
         ("balance", Some(args)) => {
-            let (pubkey, mint) = (|| -> anyhow::Result<_> {
-                let pubkey = eth_pubkey_of(args, "address")?;
+            let (eth_address, mint) = (|| -> anyhow::Result<_> {
+                let eth_address = eth_address_of(args, "address")?;
                 let mint = pubkey_of(args, "recipient").unwrap();
 
-                Ok((pubkey, mint))
+                Ok((eth_address, mint))
             })()
             .context("Preparing parameters for execution command `balance`")?;
 
-            balance(config, pubkey, mint).context("Failed to execute `balance` command")?
+            balance(config, eth_address, mint).context("Failed to execute `balance` command")?
         }
         _ => unreachable!(),
     }
     Ok(())
+}
+
+#[test]
+fn test_eth_address_gen_from_secret() {
+    use secp256k1::*;
+
+    const INPUT_PV: &str = "a53b70c96e7960f1dc295c13fc4c6598a94cd6e98c418e5d4f33146402d13935";
+    let private = SecretKey::parse_slice(&hex::decode(INPUT_PV).unwrap().as_slice()).unwrap();
+    let eth_address = secp256k1::PublicKey::from_secret_key(&private);
+    let hashed_eth_pk = construct_eth_pubkey(&eth_address);
+    assert_eq!(
+        "7f14493c18aa7ff329a3cbd8309296f1ab838c21",
+        hex::encode(hashed_eth_pk)
+    );
 }
 
 #[test]
@@ -416,22 +422,4 @@ fn test_parse_eth_pv() {
     let str_pub = hex::decode(EXPECTED_PUB).unwrap();
 
     assert_eq!(&str_pub, serialized.as_ref());
-}
-
-#[test]
-fn test_parse_eth_pk() {
-    use secp256k1::*;
-    use std::str;
-
-    const EXPECTED_PV: &str = "09e910621c2e988e9f7f6ffcd7024f54ec1461fa6e86a4b545e9e1fe21c28866";
-    const INPUT_PUB: &str = "048e66b3e549818ea2cb354fb70749f6c8de8fa484f7530fc447d5fe80a1c424e4f5ae648d648c980ae7095d1efad87161d83886ca4b6c498ac22a93da5099014a";
-
-    let decoded_pk = &hex::decode(INPUT_PUB).unwrap();
-    let public = PublicKey::parse_slice(decoded_pk.as_slice(), None).unwrap();
-
-    let decoded_pv = hex::decode(EXPECTED_PV).unwrap();
-    let private = SecretKey::parse_slice(decoded_pv.as_slice()).unwrap();
-    let derived_pk = PublicKey::from_secret_key(&private);
-
-    assert_eq!(public, derived_pk);
 }

@@ -256,7 +256,7 @@ impl Processor {
                     acc_to_create_info,
                     rent_account_info,
                     rent,
-                    eth_address.hashed_eth_pk,
+                    eth_address.eth_address,
                 )
             }
             ClaimableProgramInstruction::Claim(instruction) => {
@@ -273,7 +273,7 @@ impl Processor {
                     destination_account_info,
                     authority_account_info,
                     instruction_info,
-                    instruction.hashed_eth_pk,
+                    instruction.eth_address,
                     instruction.amount,
                 )
             }
