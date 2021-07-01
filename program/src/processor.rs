@@ -36,6 +36,7 @@ impl Processor {
         required_lamports: u64,
         space: u64,
     ) -> ProgramResult {
+        msg!("EthereumAddress = {:?}", eth_address);
         let pair = get_address_pair(program_id, mint_key, eth_address)?;
         if *base.key != pair.base.address {
             return Err(ProgramError::InvalidSeeds);
